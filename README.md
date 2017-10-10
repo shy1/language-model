@@ -1,1 +1,1 @@
-# english language modeling code (pytorch)
+# language modeling code (pytorch)

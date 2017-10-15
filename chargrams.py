@@ -9,7 +9,7 @@ import glob
 import os
 import cchardet as chardet
 
-all_characters = string.ascii_lowercase + " 9!\"#$&\'()*+,-./:;=?[]^_|~\n\t"
+all_characters = string.ascii_lowercase + " 9!\"$\'()*,-./:;?^\n\t"
 n_characters = len(all_characters)
 count = collections.defaultdict(int)
 outputlist = ''
@@ -21,12 +21,7 @@ def chargrams(book, n=2):
     # create empty dictionary (chargram + integer frequency count) and empty outputlist string
     count = collections.defaultdict(int)
     outputlist = ''
-    # replace tabs and newlines with spaces
-    #clean_input = re.compile(r'[\t\n]').sub(' ', book)
-    # replace sequences of two or more spaces with a single space
-    #clean_input = re.sub(' {2,}', ' ', clean_input)
-    # convert all letters to lower case
-    #clean_input = clean_input.lower()
+    book = gut_clean(book)
     for idx in range(0, len(book) - (n - 1)):
         count[book[idx:idx + n]] += 1
     for ngram, cnt in reversed(sorted(count.items(), key=itemgetter(1))):
@@ -34,8 +29,12 @@ def chargrams(book, n=2):
         #print(listitem)
         outputlist = outputlist + '\n' + listitem
     print(len(count))
+
     outputlist = outputlist[1:]
-    return outputlist
+    with open('sherlock.txt', 'w') as ofile:
+        ofile.write(outputlist)
+
+    return count
 
 def removeHardwraps(book):
     # raw gutenberg data contains extraneous newline characters '\n' for word wrapping
@@ -48,32 +47,59 @@ def removeHardwraps(book):
     book = re.sub('ppQQpp', '\n\n', book)
     return book
 
+def separate1(text, char):
+    qsplit = text.split(char)
+    s = '^' + char
+    text = s.join(qsplit)
+    return text
+
+def separate2(text, char):
+    qsplit = text.split(char)
+    s = char + '^'
+    text = s.join(qsplit)
+    return text
+
+def substitute(text, c1, c2):
+    ssplit = text.split(c1)
+    s = c2
+    text = s.join(ssplit)
+    return text
+
 def gut_clean(book):
     book = removeHardwraps(book)
     #clean_input = re.compile(r'[\t\n]').sub(' ', book)
     # replace sequences of two or more spaces with a single space
     clean_input = re.sub(' {2,}', ' ', book)
+    clean_input = re.sub('\n{2,}', '\n', book)
     # convert all letters to lower case
     clean_input = clean_input.lower()
+    prev_c = " "
+    both_c = " "
+    clean_input = re.sub('_', '', clean_input)
+    clean_input = re.sub('[]>}]', ')', clean_input)
+    clean_input = re.sub('[[{<]', '(', clean_input)
+
+    # for char in "!$(),.:;?/*":
+    #     clean_input = separate1(clean_input, char)
+    # for char in "!$(),.:;?/*":
+    #     clean_input = separate2(clean_input, char)
+
+    clean_input = re.sub('[`]', '\'', clean_input)
+    clean_input = re.sub('[\\\\]', '/', clean_input)
+    clean_input = re.sub('[0-8]', '9', clean_input)
+    # clean_input = re.sub('["]', '^\"^', clean_input)
+
     for c in clean_input:
-        if c not in all_characters:
-            if c in '012345678':
-                clean_input = re.sub(c, '9', clean_input)
-            elif c in '<{':
-                clean_input = re.sub(c, '[', clean_input)
-            elif c in '>}':
-                clean_input = re.sub(c, ']', clean_input)
-            elif c == '`':
-                clean_input = re.sub(c, '\'', clean_input)
-            elif c == '%':
-                clean_input = re.sub(c, '#', clean_input)
-            elif c == '@':
-                clean_input = re.sub(c, '&', clean_input)
-            elif c == '\\':
-                c = '\\\\'
-                clean_input = re.sub(c, '|', clean_input)
-            else:
-                clean_input = re.sub(c, '$', clean_input)
+        try:
+            if c not in all_characters:
+                clean_input = substitute(clean_input, c, '*')
+        except:
+            print(c)
+
+    # clean_input = re.sub('[*]', '^*^', clean_input)
+    # clean_input = re.sub('\^{2,}', '^', clean_input)
+    # clean_input = re.sub('\^ | \^', ' ', clean_input)
+    # clean_input = re.sub('\^\n|\n\^', '\n', clean_input)
     return clean_input
 
 def num2char(text1):
@@ -108,9 +134,10 @@ def cdetect(inputpath):
     with open('encodings.txt', 'w') as ofile:
         ofile.write(outputlist)
 
-def folder2cgrams(inputpath, outputfile='counts2.txt', n=2):
+def folder2cgrams(inputpath, outputfile='counts4.txt', n=2):
     count = collections.defaultdict(int)
     outputlist = ''
+    outputpath = inputpath + '/separated/'
     inputpath = inputpath + '/*.txt'
     ## section for cleaning texts/books if required
     # for filename in findFiles(inputpath):
@@ -126,12 +153,22 @@ def folder2cgrams(inputpath, outputfile='counts2.txt', n=2):
     for filename in findFiles(inputpath):
         with open(filename, "r") as f:
             book = f.read()
+        book = gut_clean(book)
+
+        temp = os.path.split(filename)
+        outputbook = outputpath + temp[1]
+        with open(outputbook, 'w') as ofile:
+            ofile.write(book)
+
+        #book = re.sub('\n', '', book)
         for idx in range(0, len(book) - (n - 1)):
             count[book[idx:idx + n]] += 1
+
     for ngram, cnt in reversed(sorted(count.items(), key=itemgetter(1))):
         listitem = u'{}\t{}'.format(ngram, cnt)
         #print(listitem)
-        outputlist = outputlist + '\n' + listitem
+        if "\n" not in listitem:
+            outputlist = outputlist + '\n' + listitem
     print(len(count))
 
     #print(outputlist)

@@ -9,7 +9,7 @@ import glob
 import os
 import cchardet as chardet
 
-all_characters = string.ascii_lowercase + " 9!\"$\'()*,-./:;?\n"
+all_characters = string.ascii_lowercase + " 9!\"$\'()*,-./:;?^\n\t"
 n_characters = len(all_characters)
 count = collections.defaultdict(int)
 outputlist = ''
@@ -21,7 +21,12 @@ def chargrams(book, n=2):
     # create empty dictionary (chargram + integer frequency count) and empty outputlist string
     count = collections.defaultdict(int)
     outputlist = ''
-    book = gut_clean(book)
+    # replace tabs and newlines with spaces
+    #clean_input = re.compile(r'[\t\n]').sub(' ', book)
+    # replace sequences of two or more spaces with a single space
+    #clean_input = re.sub(' {2,}', ' ', clean_input)
+    # convert all letters to lower case
+    #clean_input = clean_input.lower()
     for idx in range(0, len(book) - (n - 1)):
         count[book[idx:idx + n]] += 1
     for ngram, cnt in reversed(sorted(count.items(), key=itemgetter(1))):
@@ -29,12 +34,8 @@ def chargrams(book, n=2):
         #print(listitem)
         outputlist = outputlist + '\n' + listitem
     print(len(count))
-
     outputlist = outputlist[1:]
-    with open('sherlock.txt', 'w') as ofile:
-        ofile.write(outputlist)
-
-    return count
+    return outputlist
 
 def removeHardwraps(book):
     # raw gutenberg data contains extraneous newline characters '\n' for word wrapping
@@ -67,10 +68,9 @@ def substitute(text, c1, c2):
 
 def gut_clean(book):
     book = removeHardwraps(book)
-    clean_input = re.compile(r'\t').sub('', book)
+    #clean_input = re.compile(r'[\t\n]').sub(' ', book)
     # replace sequences of two or more spaces with a single space
     clean_input = re.sub(' {2,}', ' ', book)
-    clean_input = re.sub('\n{2,}', '\n', book)
     # convert all letters to lower case
     clean_input = clean_input.lower()
     prev_c = " "
@@ -79,27 +79,66 @@ def gut_clean(book):
     clean_input = re.sub('[]>}]', ')', clean_input)
     clean_input = re.sub('[[{<]', '(', clean_input)
 
-    # for char in "!$(),.:;?/*":
-    #     clean_input = separate1(clean_input, char)
-    # for char in "!$(),.:;?/*":
-    #     clean_input = separate2(clean_input, char)
+    for char in "!$(),.:;?/*":
+        clean_input = separate1(clean_input, char)
+    for char in "!$(),.:;?/*":
+        clean_input = separate2(clean_input, char)
 
     clean_input = re.sub('[`]', '\'', clean_input)
     clean_input = re.sub('[\\\\]', '/', clean_input)
     clean_input = re.sub('[0-8]', '9', clean_input)
-    # clean_input = re.sub('["]', '^\"^', clean_input)
+    clean_input = re.sub('["]', '^\"^', clean_input)
+    clean_input = re.sub('\^{2,}', '^', clean_input)
+    clean_input = re.sub('\^ | \^', ' ', clean_input)
 
     for c in clean_input:
         try:
             if c not in all_characters:
                 clean_input = substitute(clean_input, c, '*')
+                # if c in '012345678':
+                    #clean_input = re.sub(c, '9', clean_input)
+                #     a = 1
+                # elif c == '`':
+                #     clean_input = re.sub(c, '\'', clean_input)
+                # elif c == '\\':
+                #     c = '\\\\'
+                #     clean_input = re.sub(c, '/', clean_input)
+                # else:
+                #     #clean_input = re.sub(c, '_', clean_input)
+
+            # if prev_c == "*":
+            #     both_c = "\\" + prev_c + c
+            #     sepa_c = prev_c + '^' + c
+            #     if (c != " "):
+            #         clean_input = re.sub(both_c, sepa_c, clean_input)
         except:
             print(c)
+        #prev_c = c
+    clean_input = re.sub('[*]', '^*^', clean_input)
 
-    # clean_input = re.sub('[*]', '^*^', clean_input)
-    # clean_input = re.sub('\^{2,}', '^', clean_input)
-    # clean_input = re.sub('\^ | \^', ' ', clean_input)
-    # clean_input = re.sub('\^\n|\n\^', '\n', clean_input)
+    #clean_input = re.sub('(\w)\*', '\1^*', clean_input)
+
+    # qsplit = clean_input.split('^ ')
+    # s = ' '
+    # clean_input = s.join(qsplit)
+
+
+        #     else:
+        #         both_c = prev_c + c
+        #     if c in "$()*+./?[]|":
+        #         both_c = prev_c + "\\" + c
+        #     else:
+        #         sepa_c = prev_c + '^' + c
+        #     if (c in "!\"#$&\()*+,-./:;=?[]_|~\n\t") and (prev_c != " "):
+        #         clean_input = re.sub(both_c, sepa_c, clean_input)
+            # if (prev_c in "!\"#$&()*+,-./:;=?[]_|~\n\t") and (c != " "):
+            #     clean_input = re.sub(both_c, sepa_c, clean_input)
+    # for char in "/*":
+    #     clean_input = separate1(clean_input, char)
+    # for char in "/*":
+    #     clean_input = separate2(clean_input, char)
+
+
     return clean_input
 
 def num2char(text1):
@@ -134,25 +173,12 @@ def cdetect(inputpath):
     with open('encodings.txt', 'w') as ofile:
         ofile.write(outputlist)
 
-def fixspecial(book):
-    #book = re.compile(r'\t').sub('', book)
-    #also converting ^ to wildcard *
-    #book = re.compile(r'\^').sub('*', book)
-    book = re.compile(r'/').sub(' / ', book)
-    book = re.compile(r'\(').sub(' (', book)
-    book = re.compile(r'\)').sub(') ', book)
-    book = re.sub(' {2,}', ' ', book)
-    return book
-
-def folder2cgrams(inputpath, outputfile='counts2-cleaner3.txt', n=2):
+def folder2cgrams(inputpath, outputfile='counts4.txt', n=2):
     count = collections.defaultdict(int)
     outputlist = ''
-
-    #outputpath = inputpath + '/separated/'
-    outputpath = '/home/user01/dev/data/gutenberg/cleaner/'
-
+    outputpath = inputpath + '/separated/'
     inputpath = inputpath + '/*.txt'
-    ## section for ignoring non utf8/ascii texts/books if required
+    ## section for cleaning texts/books if required
     # for filename in findFiles(inputpath):
     #     with open(filename, "rb") as f:
     #         msg = f.read()
@@ -163,29 +189,20 @@ def folder2cgrams(inputpath, outputfile='counts2-cleaner3.txt', n=2):
     #         book = re.sub(' {2,}', ' ', book)
     #         # convert all letters to lower case
     #         book = book.lower()
-    i = 0
     for filename in findFiles(inputpath):
-        i += 1
         with open(filename, "r") as f:
             book = f.read()
-        #book = gut_clean(book)
-        book = fixspecial(book)
-
+        book = gut_clean(book)
+        for idx in range(0, len(book) - (n - 1)):
+            count[book[idx:idx + n]] += 1
         temp = os.path.split(filename)
         outputbook = outputpath + temp[1]
         with open(outputbook, 'w') as ofile:
             ofile.write(book)
-
-        #book = re.sub('\n', '', book)
-        for idx in range(0, len(book) - (n - 1)):
-            count[book[idx:idx + n]] += 1
-        print(i, len(count))
-
     for ngram, cnt in reversed(sorted(count.items(), key=itemgetter(1))):
         listitem = u'{}\t{}'.format(ngram, cnt)
         #print(listitem)
-        if "\n" not in listitem:
-            outputlist = outputlist + '\n' + listitem
+        outputlist = outputlist + '\n' + listitem
     print(len(count))
 
     #print(outputlist)

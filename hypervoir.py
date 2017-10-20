@@ -135,9 +135,9 @@ def online_learning(u,v,c,a,s):
 s1 = "To Sherlock Holmes she is always THE woman. I have seldom heard him mention her any other name. In his eyes she eclipses and predominates the whole of her sex. It was not that he felt any emotion akin to love for Irene Adler. All emotions, and that one particularly, were abhorrent to his cold, precise but admirably balanced mind. He was, I take it, the most perfect reasoning and observing machine that the world has seen, but as a lover he would have placed himself in a false position. He never spoke of the softer passions, save with a gibe and a sneer. They were admirable things for the observer--excellent for drawing the veil from men’s motives and actions. But for the trained reasoner to admit such intrusions into his own delicate and finely adjusted temperament was to introduce a distracting factor which might throw a doubt upon all his mental results. "
 s2 = "Grit in a sensitive instrument, or a crack in one of his own high-power lenses, would not be more disturbing than a strong emotion in a nature such as his. And yet there was but one woman to him, and that woman was the late Irene Adler, of dubious and questionable memory."
 #s = s1 + s2
-with open('test02.txt', 'r') as ofile:
-    s = ofile.read()
-n=2
+# with open('test02.txt', 'r') as ofile:
+#     s = ofile.read()
+# n=2
 # grams = cg.chargrams(s)
 # glist = []
 # for ngram, cnt in grams.items():
@@ -149,6 +149,10 @@ n=2
 # characterindex = {char:idx for idx,char in enumerate(allchars)}
 # gramindex = {gram:idx for idx,gram in enumerate(glist)}
 #print(gramindex)
+
+with open('test02.txt', 'r') as ofile:
+    s = ofile.read()
+n=2
 
 glist = []
 with open('counts1024.txt', 'r') as countfile:

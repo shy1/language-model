@@ -17,6 +17,7 @@ def gramsintext(text, n=2):
 def init(M, N):
     u, v = cp.random.rand(N, M, dtype=np.float32), cp.identity(M, dtype=np.float32)
     # normalizing columns in NxM sized input matrix U as in formulas 6, 7
+
     for m in range(M):
         u[:, m] = u[:, m] - u[:, m].mean()
         u[:, m] = u[:, m] / cp.linalg.norm(u[:, m])
@@ -64,9 +65,10 @@ def online_grams(u, v, c, a, s):
         err = error(s, ssa)
         tt = tt + 1
         if tt % 3 == 0:
+            a = a * 0.985
             #elapsed = time.clock() - start
             #elapsedp = time.perf_counter() - startp
-            print(tt, "err=", err, "%")
+            print(tt, "err=", err, "%", "alpha:", a)
     sstext = ""
     #endtotal = time.clock() - total
     endtotalp = time.perf_counter() - totalp
@@ -105,12 +107,12 @@ with open('test02.txt', 'r') as ofile:
     s = ofile.read()
 
 glist = []
-with open('counts1024.txt', 'r') as countfile:
+with open('counts1024b.txt', 'r') as countfile:
     counts = countfile.readlines()
 for line in counts:
     glist.append(line[:2])
 gramindex = {gram:idx for idx, gram in enumerate(glist)}
-print(len(gramindex))
+print(len(gramindex), type(gramindex))
 
 unclean = False
 sgi = []
@@ -125,9 +127,10 @@ print(len(sgi))
 
 T, M = len(sgi), len(glist)
 mt = M / T
-N = 3072
+N = int(M * 2.71828)
+#N = 2560
 #alpha = .52037
-alpha = 0.73814
+alpha = 0.53
 #alpha = np.log(2) / np.log(3)
 div = ' mt:nt '
 nt = N / T
@@ -135,7 +138,7 @@ nmt = [str(mt), str(nt)]
 print(div.join(nmt))
 print(T, N, M, alpha)
 
-cp.random.seed(25712)
+cp.random.seed(35712)
 u, v = init(M, N)
 print(u.shape, v.shape)
 

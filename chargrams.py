@@ -138,18 +138,19 @@ def fixspecial(book):
     #book = re.compile(r'\t').sub('', book)
     #also converting ^ to wildcard *
     #book = re.compile(r'\^').sub('*', book)
-    book = re.compile(r'/').sub(' / ', book)
-    book = re.compile(r'\(').sub(' (', book)
-    book = re.compile(r'\)').sub(') ', book)
+    # book = re.compile(r'/').sub(' / ', book)
+    # book = re.compile(r'\(').sub(' (', book)
+    # book = re.compile(r'\)').sub(') ', book)
+    book = re.compile(r'\n').sub(' ', book)
     book = re.sub(' {2,}', ' ', book)
     return book
 
-def folder2cgrams(inputpath, outputfile='counts2-cleaner3.txt', n=2):
+def folder2cgrams(inputpath, outputfile='counts2-nolines.txt', n=2):
     count = collections.defaultdict(int)
     outputlist = ''
 
     #outputpath = inputpath + '/separated/'
-    outputpath = '/home/user01/dev/data/gutenberg/cleaner/'
+    outputpath = '/home/user01/dev/data/gutenberg/nolines/'
 
     inputpath = inputpath + '/*.txt'
     ## section for ignoring non utf8/ascii texts/books if required
@@ -184,8 +185,8 @@ def folder2cgrams(inputpath, outputfile='counts2-cleaner3.txt', n=2):
     for ngram, cnt in reversed(sorted(count.items(), key=itemgetter(1))):
         listitem = u'{}\t{}'.format(ngram, cnt)
         #print(listitem)
-        if "\n" not in listitem:
-            outputlist = outputlist + '\n' + listitem
+        #if "\n" not in listitem:
+        outputlist = outputlist + '\n' + listitem
     print(len(count))
 
     #print(outputlist)

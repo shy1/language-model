@@ -1,6 +1,7 @@
 import chargrams as cg
 import glob
 import os
+import re
 
 def findFiles(path): return glob.glob(path)
 def openbook(filename):
@@ -8,10 +9,19 @@ def openbook(filename):
         book = ofile.read()
     return book
 
-def writesgrams(sgrams, filename):
+def write2single(cgrams, filename):
     book = ''
     space  = ' '
-    book = space.join(sgrams)
+    book = space.join(cgrams)
+
+    with open(filename, 'a') as ofile:
+        ofile.write(book)
+        ofile.write("\n")
+
+def writecgrams(cgrams, filename):
+    book = ''
+    space  = ' '
+    book = space.join(cgrams)
 
     with open(filename, 'w') as ofile:
         ofile.write(book)
@@ -40,10 +50,35 @@ def replaceasterisk(sgram):
     print(temp1, temp2)
 
 def replacespace(sgram):
-    temp1 = sgram[0] + ' '
-    temp2 = ' ' + sgram[1]
-    print(temp1, temp2)
+    temp1 = sgram[0] + '_'
+    temp2 = '_' + sgram[1]
+    #print(temp1, temp2)
     return temp1, temp2
+
+def convert2chargrams(filename, gramindex):
+    n=2
+    book = openbook(filename)
+    book = re.compile(r'\t').sub(' ', book)
+    book = re.sub(' \n', '\n', book)
+    book = re.sub('\n ', '\n', book)
+    book = re.sub('_\n', '\n', book)
+    book = re.sub('\n_', '\n', book)
+    book = re.sub(' {2,}', ' ', book)
+    cgrams = []
+    #sgrams = []
+    for idx in range(0, len(book) - (n - 1)):
+        cgram = book[idx:idx + n]
+        #sgrams.append(sgram)
+        if cgram in gramindex:
+            cgram = re.sub(' ', '_', cgram)
+            cgrams.append(cgram)
+        elif "\n" not in cgram:
+            temp1, temp2 = replacespace(cgram)
+            cgrams.extend([temp1, temp2])
+        else:
+            cgram = "\n"
+            cgrams.append(cgram)
+    return cgrams
 
 def convert2idx(filename, gramindex):
     n=2
@@ -74,8 +109,23 @@ def folder2bigrams(inputpath='/home/user01/dev/data/gutenberg/nolines', outputpa
         writebigrams(bigrams, outputbook)
         print(i)
 
+def folder2cgrams(inputpath='/home/user01/dev/data/gutenberg/cleaner', outputpath='/home/user01/dev/data/gutenberg/chargrams/', n=2):
+    inputpath = inputpath + '/*.txt'
 
-folder2bigrams()
+    gramindex = getgramindex()
+    i = 0
+    for filename in findFiles(inputpath):
+        i += 1
+        cgrams = convert2chargrams(filename, gramindex)
+
+        temp = os.path.split(filename)
+        outputbook = outputpath + temp[1]
+        #writecgrams(cgrams, outputbook)
+        write2single(cgrams, '/home/user01/dev/data/gutenberg/chargrams/concatenated.txt')
+        print(i)
+
+#folder2bigrams()
+folder2cgrams()
 # bigrams = convert2idx('/home/user01/dev/data/gutenberg/nolines/Joseph Conrad___The Secret Sharer.txt')
 # print(len(bigrams), type(bigrams))
 # writebigrams(bigrams, 'bigtest.txt')

@@ -141,7 +141,7 @@ def fixspecial(book):
     # book = re.compile(r'/').sub(' / ', book)
     # book = re.compile(r'\(').sub(' (', book)
     # book = re.compile(r'\)').sub(') ', book)
-    book = re.compile(r'\n').sub(' ', book)
+    book = re.compile(r'\t').sub(' ', book)
     book = re.sub(' {2,}', ' ', book)
     return book
 

@@ -13,11 +13,10 @@ def gramsintext(text, n=2):
     gramindex = {gram:idx for idx, gram in enumerate(glist)}
     return glist, gramindex
 
-# create input weight matrix u and hidden state/reservoir matrix v
+# create input weight matrix u and output value one-hot identity matrix(?) v
 def init(M, N):
     u, v = cp.random.rand(N, M, dtype=np.float32), cp.identity(M, dtype=np.float32)
     # normalizing columns in NxM sized input matrix U as in formulas 6, 7
-
     for m in range(M):
         u[:, m] = u[:, m] - u[:, m].mean()
         u[:, m] = u[:, m] / cp.linalg.norm(u[:, m])

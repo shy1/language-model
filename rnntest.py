@@ -30,7 +30,7 @@ def makeLower(upper):
     return str.lower(upper)
 
 # change findFiles parameter to appropriate relative path
-for filename in findFiles('../*.txt'):
+for filename in findFiles('/home/user01/dev/data/gutenberg/clean/dickens/*.txt'):
     temp = ''
     category = filename.split('/')[-1].split('.')[0]
     #category = category.lower()

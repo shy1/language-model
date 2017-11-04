@@ -1,4 +1,4 @@
-import chargrams as cg
+#import chargrams as cg
 import glob
 import os
 import re
@@ -59,15 +59,18 @@ def convert2chargrams(filename, gramindex):
     n=2
     book = openbook(filename)
     book = re.compile(r'\t').sub(' ', book)
-    book = re.sub(' \n', '\n', book)
-    book = re.sub('\n ', '\n', book)
-    book = re.sub('_\n', '\n', book)
-    book = re.sub('\n_', '\n', book)
+    #book = re.sub(' \n', '\n', book)
+    #book = re.sub('\n ', '\n', book)
+    #book = re.sub('\n', ' \n', book)
+    book = re.sub('\n', ' \n ', book)
+    #book = re.sub('_\n', '\n', book)
+    #book = re.sub('\n_', '\n', book)
     book = re.sub(' {2,}', ' ', book)
     cgrams = []
     #sgrams = []
-    for idx in range(0, len(book) - (n - 1)):
+    for idx in range(0, len(book) - (n - 1), 2):
         cgram = book[idx:idx + n]
+        #print(cgram)
         #sgrams.append(sgram)
         if cgram in gramindex:
             cgram = re.sub(' ', '_', cgram)
@@ -76,7 +79,7 @@ def convert2chargrams(filename, gramindex):
             temp1, temp2 = replacespace(cgram)
             cgrams.extend([temp1, temp2])
         else:
-            cgram = "\n"
+            #cgram = "\n"
             cgrams.append(cgram)
     return cgrams
 
@@ -118,10 +121,11 @@ def folder2cgrams(inputpath='/home/user01/dev/data/gutenberg/cleaner', outputpat
         i += 1
         cgrams = convert2chargrams(filename, gramindex)
 
-        temp = os.path.split(filename)
-        outputbook = outputpath + temp[1]
+        #temp = os.path.split(filename)
+        #outputbook = outputpath + temp[1]
         #writecgrams(cgrams, outputbook)
-        write2single(cgrams, '/home/user01/dev/data/gutenberg/chargrams/concatenated.txt')
+        
+        write2single(cgrams, '/home/user01/dev/data/gutenberg/chargrams/concatenated-w2.txt')
         print(i)
 
 #folder2bigrams()

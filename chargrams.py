@@ -9,7 +9,7 @@ import glob
 import os
 import cchardet as chardet
 
-all_characters = string.ascii_lowercase + " 9!\"$\'()*,-./:;?\n"
+all_characters = string.ascii_lowercase + " 9\'-\n"
 n_characters = len(all_characters)
 count = collections.defaultdict(int)
 outputlist = ''
@@ -135,22 +135,34 @@ def cdetect(inputpath):
         ofile.write(outputlist)
 
 def fixspecial(book):
+    book2 = ''
     #book = re.compile(r'\t').sub('', book)
     #also converting ^ to wildcard *
     #book = re.compile(r'\^').sub('*', book)
     # book = re.compile(r'/').sub(' / ', book)
     # book = re.compile(r'\(').sub(' (', book)
     # book = re.compile(r'\)').sub(') ', book)
-    book = re.compile(r'\t').sub(' ', book)
-    book = re.sub(' {2,}', ' ', book)
+    #book = re.compile(r'\t').sub(' ', book)
+    book = re.compile(r'\!').sub('.', book)
+    book = re.compile(r'\?').sub('.', book)
+    book = re.compile(r'\.').sub('\n', book)
+    for c in book:
+        try:
+            if c not in all_characters:
+                c = ' '
+        except:
+            print(c)
+        book2 += c
+
+    book = re.sub(' {2,}', ' ', book2)
     return book
 
-def folder2cgrams(inputpath, outputfile='counts2-nolines.txt', n=2):
+def folder2cgrams(inputpath='/home/user01/dev/data/gutenberg/cleaner', outputfile='counts3-nopunc.txt', n=3):
     count = collections.defaultdict(int)
     outputlist = ''
 
     #outputpath = inputpath + '/separated/'
-    outputpath = '/home/user01/dev/data/gutenberg/nolines/'
+    outputpath = '/home/user01/dev/data/gutenberg/nopunc/'
 
     inputpath = inputpath + '/*.txt'
     ## section for ignoring non utf8/ascii texts/books if required
@@ -171,7 +183,8 @@ def folder2cgrams(inputpath, outputfile='counts2-nolines.txt', n=2):
             book = f.read()
         #book = gut_clean(book)
         book = fixspecial(book)
-
+        book = re.compile(r'\'').sub('', book)
+        book = re.compile(r'-').sub(' ', book)
         temp = os.path.split(filename)
         outputbook = outputpath + temp[1]
         with open(outputbook, 'w') as ofile:
@@ -185,8 +198,8 @@ def folder2cgrams(inputpath, outputfile='counts2-nolines.txt', n=2):
     for ngram, cnt in reversed(sorted(count.items(), key=itemgetter(1))):
         listitem = u'{}\t{}'.format(ngram, cnt)
         #print(listitem)
-        #if "\n" not in listitem:
-        outputlist = outputlist + '\n' + listitem
+        if "\n" not in ngram and ngram[1] != ' ':
+            outputlist = outputlist + '\n' + listitem
     print(len(count))
 
     #print(outputlist)

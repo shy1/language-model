@@ -2,8 +2,11 @@
 import numpy as np
 import cupy as cp
 import chargrams as cg
-import csv
+import re
+#import csv
 import time
+#from sklearn.metrics import log_loss
+from gensim.models.keyedvectors import KeyedVectors
 
 def gramsintext(text, n=2):
     grams = cg.chargrams(text, n)
@@ -15,12 +18,33 @@ def gramsintext(text, n=2):
 
 # create input weight matrix u and output value one-hot identity matrix(?) v
 def init(M, N):
-    u, v = cp.random.rand(N, M, dtype=np.float32), cp.identity(M, dtype=np.float32)
+    nu = np.empty((M, M), dtype=np.float32)
+    ru = cp.random.rand(N,M, dtype=np.float32)
+    v = cp.identity(M, dtype=np.float32)
     # normalizing columns in NxM sized input matrix U as in formulas 6, 7
+    wv = KeyedVectors.load_word2vec_format('/home/user01/dev/wang2vec/embeddings2-i3e4-ssg-neg15-s1024w4.txt', binary=False)
+    temp = wv.index2word
+    glist = np.array(temp[1:len(temp)])
+#    print(len(arr))
+    print(glist[1022])
+#    print(wv['e_'])
+    
+    for i in range(0, M):        
+#        nu[:, i] = wv[glist[i]]
+        temp = glist[i]
+        nu[:, i] = wv.word_vec(temp, use_norm=False)
+
+    #print(nu.shape, nu)
+    u = cp.asarray(nu)
+#    u = ru
     for m in range(M):
         u[:, m] = u[:, m] - u[:, m].mean()
         u[:, m] = u[:, m] / cp.linalg.norm(u[:, m])
-    return u, v
+    
+    #print(u.shape, u)
+    glist = [re.sub(r'_', ' ', j) for j in glist]
+    #print(glist)
+    return u, v, glist
 
 def grecall(T, N, w, u, c, a, ss):
     x, i = cp.zeros(N, dtype=np.float32), ss
@@ -59,15 +83,20 @@ def online_grams(u, v, c, a, s):
             x = x / cp.linalg.norm(x)
             p = cp.exp(cp.dot(w, x))
             p = p / cp.sum(p)
+#            print(p[0:19])
+#            print(v[0:19, s[t+1]])
+            smax_idx = cp.argmax(p)
+            smax_prob = p[smax_idx]
+#            print(tv)
             w = w + cp.outer(v[:, s[t+1]] - p, x)
         ssa = grecall(T, N, w, u, c, a, s[0])
         err = error(s, ssa)
         tt = tt + 1
         if tt % 3 == 0:
-            a = a * 0.985
+#            a = a * 0.985
             #elapsed = time.clock() - start
             #elapsedp = time.perf_counter() - startp
-            print(tt, "err=", err, "%", "alpha:", a)
+            print(tt, "err=", err, "%", "alpha:", a, "smax err:", 1 - smax_prob)
     sstext = ""
     #endtotal = time.clock() - total
     endtotalp = time.perf_counter() - totalp
@@ -106,19 +135,30 @@ with open('test02.txt', 'r') as ofile:
     s = ofile.read()
 
 glist = []
-with open('counts1024b.txt', 'r') as countfile:
-    counts = countfile.readlines()
-for line in counts:
-    glist.append(line[:2])
-gramindex = {gram:idx for idx, gram in enumerate(glist)}
-print(len(gramindex), type(gramindex))
+#with open('counts1024b.txt', 'r') as countfile:
+#    counts = countfile.readlines()
+#for line in counts:
+#    glist.append(line[:2])
+#gramindex = {gram:idx for idx, gram in enumerate(glist)}
+#print(len(gramindex), type(gramindex))
 
 unclean = False
 sgi = []
 stride = 1
 
+s = re.sub('\n', ' ', s)
 if unclean:
     s = cg.gut_clean(s)
+
+cp.random.seed(11712)
+
+N = 1024
+M = 1024
+
+u, v, glist = init(M, N)
+gramindex = {gram:idx for idx, gram in enumerate(glist)}
+print(len(gramindex), type(gramindex))
+print(u.shape, v.shape)
 
 for idx in range(0, len(s) - (n - 1), stride):
     sgi.append(gramindex[s[idx:idx + n]])
@@ -126,10 +166,10 @@ print(len(sgi))
 
 T, M = len(sgi), len(glist)
 mt = M / T
-N = int(M * 2.71828)
-#N = 2560
+#N = int(M * 2.71828)
+
 #alpha = .52037
-alpha = 0.53
+alpha = 0.6301
 #alpha = np.log(2) / np.log(3)
 div = ' mt:nt '
 nt = N / T
@@ -137,14 +177,12 @@ nmt = [str(mt), str(nt)]
 print(div.join(nmt))
 print(T, N, M, alpha)
 
-cp.random.seed(35712)
-u, v = init(M, N)
-print(u.shape, v.shape)
-
 # totalo = time.perf_counter()
 # ss, w = offline_grams(u, v, glist, alpha, sgi)
 # endtotalo = time.perf_counter() - totalo
 # print(endtotalo)
+#cu_glist = cp.asarray(glist, dtype=np.float32)
+#cu_sgi = cp.asarray(sgi, dtype=np.int16)
 
 ss, w = online_grams(u, v, glist, alpha, sgi)
 print(T, N, M, alpha)

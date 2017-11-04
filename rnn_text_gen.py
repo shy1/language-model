@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 # variables
-file_name = "1984.txt"
+file_name = "/home/user01/dev/data/gutenberg/cleaner/Anthony Trollope___Kept in the Dark.txt"
 maxlen = 50
 step = 3
 hidden_size = 256

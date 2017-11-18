@@ -5,6 +5,7 @@ import chargrams as cg
 import re
 import pickle
 import time
+from random import shuffle
 
 #from sklearn.metrics import log_loss
 from gensim.models.keyedvectors import KeyedVectors
@@ -120,21 +121,15 @@ def online_grams(u, v, w, a, s):
     err = 100
     tt = 0
 
-    #total = time.clock()
     totalp = time.perf_counter()
     while err > 0 and tt < T:
         x = cp.zeros(N, dtype=np.float32)
         softerr = 0
         for t in range(T - 1):
-            #start = time.clock()
-            #startp = time.perf_counter()
             x = (1.0 - a) * x + a * (u[:, s[t]] + cp.roll(x, 1))
             x = x / cp.linalg.norm(x)
             p = cp.exp(cp.dot(w, x))
-#            psum = cp.sum(p)
             p = p / cp.sum(p)
-#            print(p[0:19])
-#            print(v[0:19, s[t+1]])
             smax_idx = cp.argmax(p)
             smax_prob = p[smax_idx]
             softerr += 1 - smax_prob
@@ -146,25 +141,18 @@ def online_grams(u, v, w, a, s):
 
         tt = tt + 1
         if tt % 3 == 0:
-#            a = a * 0.98
-            #elapsed = time.clock() - start
-            #elapsedp = time.perf_counter() - startp
             print(tt, "err:", err, "%", "softavg:", avgerr, "alpha:", a)
             sstext = ""
             for ssi in range(0, len(ssg), 2):
-                #print(ssi, type(ssi))
                 sstext += glist[int(ssg[ssi])]
             print(sstext)
     sstext = ""
-    #endtotal = time.clock() - total
     endtotalp = time.perf_counter() - totalp
     for ssi in range(0, len(ssa), 2):
-        #print(ssi, type(ssi))
         sstext += glist[int(ssa[ssi])]
     print(tt, "err=", err, "%\n", sstext, "\n", endtotalp)
     sstext = ""
     for ssi in range(0, len(ssg), 2):
-        #print(ssi, type(ssi))
         sstext += glist[int(ssg[ssi])]
     print(sstext)
     return ssa, w
@@ -174,8 +162,6 @@ def offline_grams(u, v, c, a, s):
     T, (N, M), eta = len(s), u.shape, 1e-7
     X, S, x = cp.zeros((N, T-1), dtype=np.float32), cp.zeros((M, T-1), dtype=np.float32), cp.zeros(N, dtype=np.float32)
 
-    # for j in range(0,3):
-    #     print(j)
     for t in range(T - 1):
         x = (1.0 - a) * x + a * (u[:, s[t]] + cp.roll(x, 1))
         x = x / cp.linalg.norm(x)
@@ -193,22 +179,14 @@ def offline_grams(u, v, c, a, s):
     print("err=", error(s, ssa), "%\n", sstext, "\n")
     return ssa, w
 
-def train(ui, u2, u4, v, variables, leaks, s):
-    gradient = dict()
-
-    # bs = batch size
-    bs = 32
+def train_kcpa(ui, u2, u4, v, variables, leaks, bs, s, cpstates):
     T = len(s)
     N = 1024
     M = 1024
-    #total = time.clock()
-    #totalp = time.perf_counter()
     x1 = cp.zeros(N * layerscales["L1"], dtype=np.float32)
-    # x2 = cp.zeros(N, dtype=np.float32)
     x3 = cp.zeros(N * layerscales["L2"], dtype=np.float32)
-    # x4 = cp.zeros(N, dtype=np.float32)
     x5 = cp.zeros(N * layerscales["L3"], dtype=np.float32)
-    # print("x1: {} x3: {} x5: {}".format(x1.shape, x3.shape, x5.shape))
+    gradient = dict()
 
     softerr1 = 0
     err1 = 0
@@ -218,90 +196,17 @@ def train(ui, u2, u4, v, variables, leaks, s):
     err5 = 0
     softerrm = 0
     errm = 0
-#    print(x1.shape, variables["W1"].shape)
-    tm1 = (T - 1)
 
-    # floored quotient (integer without remainder)
-    fullbatches = tm1 // bs
-    lastlen = tm1 - (fullbatches * bs)
+    skipfirst = 3
+    tm1 = (T - 1 - skipfirst)
     t = 0
-    batchgrads1 = cp.empty(bs, dtype=np.float32)
-    batchgrads3 = cp.empty(bs, dtype=np.float32)
-    batchgrads5 = cp.empty(bs, dtype=np.float32)
-    lastgrads1 = cp.empty(lastlen, dtype=np.float32)
-    lastgrads3 = cp.empty(lastlen, dtype=np.float32)
-    lastgrads5 = cp.empty(lastlen, dtype=np.float32)
-    # print("batch: {} last:{}".format(batchgrads1.shape, lastgrads1.shape))
-    for b in range(fullbatches):
 
-        for i in range(bs):
-            current = s[t]
-
-            x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, current] + cp.roll(x1, 1))
-            x1 = x1 / cp.linalg.norm(x1)
-            wx = cp.dot(variables["W1"], x1)
-            wx = wx - cp.max(wx)
-            p = cp.exp(wx)
-            p1 = p / cp.sum(p)
-
-            pu2 = cp.dot(p1, u2.T)
-            x3 = (1.0 - leaks[1]) * x3 + leaks[1] * (pu2 + cp.roll(x3, 1))
-            x3 = x3 / cp.linalg.norm(x3)
-            wx = cp.dot(variables["W3"], x3)
-            wx = wx - cp.max(wx)
-            p = cp.exp(wx)
-            p3 = p / cp.sum(p)
-
-            pu4 = cp.dot(p3, u4.T)
-            x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (pu4 + cp.roll(x5, 1))
-            x5 = x5 / cp.linalg.norm(x5)
-            wx = cp.dot(variables["W5"], x5)
-            wx = wx - cp.max(wx)
-            p = cp.exp(wx)
-            p5 = p / cp.sum(p)
-            pred5 = cp.argmax(p5)
-
-            # pstack = cp.stack((p1, p3, p5), axis=1)
-            # print(variables["Ws"].shape, pstack.shape)
-
-            # wx = cp.dot(variables["Ws"], wxstack)
-            # # wx = cp.dot(pstack, variables["Ws"])
-            # # print(wx.shape)
-            # wx = wx - cp.max(wx)
-            # p = cp.exp(wx)
-            # pm = p / cp.sum(p)
-            # meanpred = cp.argmax(pm)
-
-            target = s[t+1]
-
-            target_prob1 = p1[target]
-            target_prob3 = p3[target]
-            target_prob5 = p5[target]
-            err5 = err5 + (pred5 != target)
-
-            softerr1 += 1 - target_prob1
-            softerr3 += 1 - target_prob3
-            softerr5 += 1 - target_prob5
-
-            batchgrads1[i] = cp.outer(v[:, target] - p1, x1)
-            batchgrads3[i] = cp.outer(v[:, target] - p3, x3)
-            batchgrads5[i] = cp.outer(v[:, target] - p5, x5)
-
-            t += 1
-
-        gradient["W1"] = batchgrads1.mean()
-        gradient["W3"] = batchgrads3.mean()
-        gradient["W5"] = batchgrads5.mean()
-        SGD.update_state(gradient)
-        delta = SGD.get_delta()
-        SGD.update_with_L1_regularization(variables, delta, L1)
-        # SGD.apply_L2_regularization(gradient, variables, L2)
-    for j in range(lastlen):
+    for k in range(skipfirst):
         current = s[t]
+        # skipt.append(t)
         x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, current] + cp.roll(x1, 1))
         x1 = x1 / cp.linalg.norm(x1)
         wx = cp.dot(variables["W1"], x1)
-
         wx = wx - cp.max(wx)
         p = cp.exp(wx)
         p1 = p / cp.sum(p)
@@ -317,121 +222,373 @@ def train(ui, u2, u4, v, variables, leaks, s):
         pu4 = cp.dot(p3, u4.T)
         x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (pu4 + cp.roll(x5, 1))
         x5 = x5 / cp.linalg.norm(x5)
-        wx = cp.dot(variables["W5"], x5)
-        wx = wx - cp.max(wx)
-        p = cp.exp(wx)
-        p5 = p / cp.sum(p)
-        pred5 = cp.argmax(p5)
-
-        target = s[t+1]
-        target_prob1 = p1[target]
-        target_prob3 = p3[target]
-        target_prob5 = p5[target]
-        err5 = err5 + (pred5 != target)
-
-        softerr1 += 1 - target_prob1
-        softerr3 += 1 - target_prob3
-        softerr5 += 1 - target_prob5
-
-        lastgrads1[j] = cp.outer(v[:, target] - p1, x1)
-        lastgrads3[j] = cp.outer(v[:, target] - p3, x3)
-        lastgrads5[j] = cp.outer(v[:, target] - p5, x5)
 
         t += 1
-    if lastlen > 0:
-        gradient["W1"] = lastgrads1.mean()
-        gradient["W3"] = lastgrads3.mean()
-        gradient["W5"] = lastgrads5.mean()
+
+    for b1 in range(tm1):
+        current = s[t]
+        x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, current] + cp.roll(x1, 1))
+        x1 = x1 / cp.linalg.norm(x1)
+        wx = cp.dot(variables["W1"], x1)
+        wx = wx - cp.max(wx)
+        p = cp.exp(wx)
+        p1 = p / cp.sum(p)
+
+        pu2 = cp.dot(p1, u2.T)
+        x3 = (1.0 - leaks[1]) * x3 + leaks[1] * (pu2 + cp.roll(x3, 1))
+        x3 = x3 / cp.linalg.norm(x3)
+        wx = cp.dot(variables["W3"], x3)
+        wx = wx - cp.max(wx)
+        p = cp.exp(wx)
+        p3 = p / cp.sum(p)
+
+        pu4 = cp.dot(p3, u4.T)
+        x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (pu4 + cp.roll(x5, 1))
+        x5 = x5 / cp.linalg.norm(x5)
+
+        cpstates = cp.concatenate((cpstates, x5.reshape((1, N * layerscales["L3"]))))
+
+        # wx = cp.dot(variables["W5"], x5)
+        # wx = wx - cp.max(wx)
+        # p = cp.exp(wx)
+        # p5 = p / cp.sum(p)
+        # pred5 = cp.argmax(p5)
+
+        target = s[t+1]
+        # target_prob1 = p1[target]
+        # target_prob3 = p3[target]
+        # target_prob5 = p5[target]
+        # err5 = err5 + (pred5 != target)
+        # # softerr1 += 1 - target_prob1
+        # # softerr3 += 1 - target_prob3
+        # softerr5 += 1 - target_prob5
+
+        gradient["W1"] = cp.outer(v[:, target] - p1, x1)
+        gradient["W3"] = cp.outer(v[:, target] - p3, x3)
+        # gradient["W5"] = cp.outer(v[:, target] - p5, x5)
         SGD.update_state(gradient)
         delta = SGD.get_delta()
         SGD.update_with_L1_regularization(variables, delta, L1)
+        t += 1
 
+    # softerrors = dict()
+    # prederrors = dict()
+    # # softerrors["lay1"] = softerr1 / (tm1)
+    # # softerrors["lay3"] = softerr3 / (tm1)
+    # softerrors["lay5"] = softerr5 / (tm1)
+    # prederrors["lay5"] = err5 * 100.0 / (tm1)
+
+    return variables, cpstates
+
+def train(ui, u2, u4, v, variables, leaks, bs, testflag, s):
+    T = len(s)
+    N = 1024
+    M = 1024
+    x1 = cp.zeros(N * layerscales["L1"], dtype=np.float32)
+    x3 = cp.zeros(N * layerscales["L2"], dtype=np.float32)
+    x5 = cp.zeros(N * layerscales["L3"], dtype=np.float32)
+    gradient = dict()
+
+    softerr1 = 0
+    err1 = 0
+    softerr3 = 0
+    err3 = 0
+    softerr5 = 0
+    err5 = 0
+    softerrm = 0
+    errm = 0
+
+    skipfirst = 3
+    t = 5
+    tm1 = (T - 1 - t - skipfirst)
+
+    if bs > 1:
+        # floored quotient (integer without remainder)
+        fullbatches = tm1 // bs
+        lastlen = tm1 - (fullbatches * bs)
+        # print(skipfirst, T, tm1, fullbatches, lastlen)
+
+        M1, N1 = variables["W1"].shape
+        M3, N3 = variables["W3"].shape
+        M5, N5 = variables["W5"].shape
+        # print(M1, N1)
+        batchgrads1 = cp.empty((bs, M1, N1), dtype=np.float32)
+        batchgrads3 = cp.empty((bs, M3, N3), dtype=np.float32)
+        batchgrads5 = cp.empty((bs, M5, N5), dtype=np.float32)
+        if lastlen > 0:
+            lastgrads1 = cp.empty((lastlen, M1, N1), dtype=np.float32)
+            lastgrads3 = cp.empty((lastlen, M3, N3), dtype=np.float32)
+            lastgrads5 = cp.empty((lastlen, M5, N5), dtype=np.float32)
+        # skipt = []
+        # batcht = []
+        # lastt = []
+
+    # don't update readout weights for the first 3 timesteps of a sequence to
+    # minimize the effects of the initial transient hidden states
+    for k in range(skipfirst):
+        step1 = s[t-5]
+        step2 = s[t-3]
+        step3 = s[t]
+        # skipt.append(t)
+        # x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, current] + cp.roll(x1, 1))
+        x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, step1] + cp.roll(x1, 1))
+        x1 = x1 / cp.linalg.norm(x1)
+        # wx = cp.dot(variables["W1"], x1)
+        # wx = wx - cp.max(wx)
+        # p = cp.exp(wx)
+        # p1 = p / cp.sum(p)
+
+        # pu2 = cp.dot(p1, u2.T)
+        # x3 = (1.0 - leaks[1]) * x3 + leaks[1] * (pu2 + cp.roll(x3, 1))
+        x3 = (1.0 - leaks[1]) * x3 + leaks[1] * (u2[:, step2] + cp.roll(x3, 1))
+        x3 = x3 / cp.linalg.norm(x3)
+        # wx = cp.dot(variables["W3"], x3)
+        # wx = wx - cp.max(wx)
+        # p = cp.exp(wx)
+        # p3 = p / cp.sum(p)
+
+        # pu4 = cp.dot(p3, u4.T)
+        # x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (pu4 + cp.roll(x5, 1))
+        x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (u4[:, step3] + cp.roll(x5, 1))
+        x5 = x5 / cp.linalg.norm(x5)
+
+        t += 1
+    if bs == 1:
+        for b1 in range(tm1):
+            step1 = s[t-5]
+            step2 = s[t-3]
+            step3 = s[t]
+            # x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, current] + cp.roll(x1, 1))
+            x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, step1] + cp.roll(x1, 1))
+            x1 = x1 / cp.linalg.norm(x1)
+            wx = cp.dot(variables["W1"], x1)
+            wx = wx - cp.max(wx)
+            p = cp.exp(wx)
+            p1 = p / cp.sum(p)
+            pred1 = cp.argmax(p1)
+
+            # pu2 = cp.dot(p1, u2.T)
+            # x3 = (1.0 - leaks[1]) * x3 + leaks[1] * (pu2 + cp.roll(x3, 1))
+            x3 = (1.0 - leaks[1]) * x3 + leaks[1] * (u2[:, step2] + cp.roll(x3, 1))
+            x3 = x3 / cp.linalg.norm(x3)
+            wx = cp.dot(variables["W3"], x3)
+            wx = wx - cp.max(wx)
+            p = cp.exp(wx)
+            p3 = p / cp.sum(p)
+            pred3 = cp.argmax(p3)
+
+            # pu4 = cp.dot(p3, u4.T)
+            # x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (pu4 + cp.roll(x5, 1))
+            x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (u4[:, step3] + cp.roll(x5, 1))
+            x5 = x5 / cp.linalg.norm(x5)
+            # print(variables["W5"].shape, x5.shape)
+            wx = cp.dot(variables["W5"], x5)
+            wx = wx - cp.max(wx)
+            p = cp.exp(wx)
+            p5 = p / cp.sum(p)
+            pred5 = cp.argmax(p5)
+
+            pstack = cp.hstack((p1, p3, p5))
+            # print(variables["Wm"].shape, pstack.shape)
+
+            wx = cp.dot(variables["Wm"], pstack)
+            # wx = cp.dot(pstack, variables["Wm"])
+            # # print(wx.shape)
+            wx = wx - cp.max(wx)
+            p = cp.exp(wx)
+            pm = p / cp.sum(p)
+            meanpred = cp.argmax(pm)
+
+            target = s[t+1]
+            target_prob1 = p1[target]
+            target_prob3 = p3[target]
+            target_prob5 = p5[target]
+            target_probm = pm[target]
+            # err5 = err5 + (pred5 != target)
+            errm = errm + (meanpred != target)
+            softerr1 += 1 - target_prob1
+            softerr3 += 1 - target_prob3
+            softerr5 += 1 - target_prob5
+            softerrm += 1 - target_probm
+            if testflag == 0:
+                # gradient["W1"] = cp.outer(v[:, target] - p1, x1)
+                # gradient["W3"] = cp.outer(v[:, target] - p3, x3)
+                gradient["W1"] = cp.outer(v[:, target] - p1, x1)
+                gradient["W3"] = cp.outer(v[:, target] - p3, x3)
+                gradient["W5"] = cp.outer(v[:, target] - p5, x5)
+                gradient["Wm"] = cp.outer(v[:, target] - pm, pstack)
+
+                SGD.update_state(gradient)
+                delta = SGD.get_delta()
+                SGD.update_with_L1_regularization(variables, delta, L1)
+            t += 1
+    else:
+        for b in range(fullbatches):
+
+            for i in range(bs):
+                current = s[t]
+                x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, current] + cp.roll(x1, 1))
+                x1 = x1 / cp.linalg.norm(x1)
+                wx = cp.dot(variables["W1"], x1)
+                wx = wx - cp.max(wx)
+                p = cp.exp(wx)
+                p1 = p / cp.sum(p)
+
+                pu2 = cp.dot(p1, u2.T)
+                x3 = (1.0 - leaks[1]) * x3 + leaks[1] * (pu2 + cp.roll(x3, 1))
+                x3 = x3 / cp.linalg.norm(x3)
+                wx = cp.dot(variables["W3"], x3)
+                wx = wx - cp.max(wx)
+                p = cp.exp(wx)
+                p3 = p / cp.sum(p)
+
+                pu4 = cp.dot(p3, u4.T)
+                x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (pu4 + cp.roll(x5, 1))
+                x5 = x5 / cp.linalg.norm(x5)
+                wx = cp.dot(variables["W5"], x5)
+                wx = wx - cp.max(wx)
+                p = cp.exp(wx)
+                p5 = p / cp.sum(p)
+                pred5 = cp.argmax(p5)
+
+                target = s[t+1]
+                # target_prob1 = p1[target]
+                # target_prob3 = p3[target]
+                target_prob5 = p5[target]
+                err5 = err5 + (pred5 != target)
+                # softerr1 += 1 - target_prob1
+                # softerr3 += 1 - target_prob3
+                softerr5 += 1 - target_prob5
+
+                batchgrads1[i] = cp.outer(v[:, target] - p1, x1)
+                batchgrads3[i] = cp.outer(v[:, target] - p3, x3)
+                batchgrads5[i] = cp.outer(v[:, target] - p5, x5)
+
+                t += 1
+
+            gradient["W1"] = batchgrads1.mean(0)
+            gradient["W3"] = batchgrads3.mean(0)
+            gradient["W5"] = batchgrads5.mean(0)
+            SGD.update_state(gradient)
+            delta = SGD.get_delta()
+            SGD.update_with_L1_regularization(variables, delta, L1)
+            # SGD.apply_L2_regularization(gradient, variables, L2)
+        if lastlen > 0:
+            for j in range(lastlen):
+                current = s[t]
+                # lastt.append(t)
+                x1 = (1.0 - leaks[0]) * x1 + leaks[0] * (ui[:, current] + cp.roll(x1, 1))
+                x1 = x1 / cp.linalg.norm(x1)
+                wx = cp.dot(variables["W1"], x1)
+
+                wx = wx - cp.max(wx)
+                p = cp.exp(wx)
+                p1 = p / cp.sum(p)
+
+                pu2 = cp.dot(p1, u2.T)
+                x3 = (1.0 - leaks[1]) * x3 + leaks[1] * (pu2 + cp.roll(x3, 1))
+                x3 = x3 / cp.linalg.norm(x3)
+                wx = cp.dot(variables["W3"], x3)
+                wx = wx - cp.max(wx)
+                p = cp.exp(wx)
+                p3 = p / cp.sum(p)
+
+                pu4 = cp.dot(p3, u4.T)
+                x5 = (1.0 - leaks[2]) * x5 + leaks[2] * (pu4 + cp.roll(x5, 1))
+                x5 = x5 / cp.linalg.norm(x5)
+                wx = cp.dot(variables["W5"], x5)
+                wx = wx - cp.max(wx)
+                p = cp.exp(wx)
+                p5 = p / cp.sum(p)
+                pred5 = cp.argmax(p5)
+
+                target = s[t+1]
+                target_prob5 = p5[target]
+                err5 = err5 + (pred5 != target)
+
+                # softerr1 += 1 - target_prob1
+                # softerr3 += 1 - target_prob3
+                softerr5 += 1 - target_prob5
+
+                lastgrads1[j] = cp.outer(v[:, target] - p1, x1)
+                lastgrads3[j] = cp.outer(v[:, target] - p3, x3)
+                lastgrads5[j] = cp.outer(v[:, target] - p5, x5)
+
+                t += 1
+            gradient["W1"] = lastgrads1.mean(0)
+            gradient["W3"] = lastgrads3.mean(0)
+            gradient["W5"] = lastgrads5.mean(0)
+            SGD.update_state(gradient)
+            delta = SGD.get_delta()
+            SGD.update_with_L1_regularization(variables, delta, L1)
+    # print("skip:", skipt)
+    # print("batch:", batcht)
+    # print("last:", lastt)
     softerrors = dict()
     prederrors = dict()
     softerrors["lay1"] = softerr1 / (tm1)
     softerrors["lay3"] = softerr3 / (tm1)
     softerrors["lay5"] = softerr5 / (tm1)
-    # softerrors["laym"] = softerrm / (tm1)
-    # prederrors["lay1"] = err1 * 100.0 / (tm1)
-    # prederrors["lay3"] = err3 * 100.0 / (tm1)
-    prederrors["lay5"] = err5 * 100.0 / (tm1)
-    # prederrors["laym"] = errm * 100.0 / (tm1)
+    softerrors["laym"] = softerrm / (tm1)
+    # prederrors["lay5"] = err5 * 100.0 / (tm1)
+    prederrors["laym"] = errm * 100.0 / (tm1)
+
     return prederrors, softerrors, variables
 
+amath.setup(dycupy)
+chunkfile = '/home/user01/dev/language-model/chunks256.p'
+outweights = '/home/user01/dev/language-model/outweights256.p'
+inweights = '/home/user01/dev/language-model/inweights256.p'
+train1280 = '/home/user01/dev/language-model/train1280.p'
+test128 = '/home/user01/dev/language-model/test128.p'
+#pickle.dump(allchunks, open(outfile, "wb"))
+chunklist = pickle.load(open(chunkfile, "rb"))
+layerscales = dict()
+variables = dict()
+L2 = dict()
+L1 = dict()
+trainchunks = []
+testchunks = []
+cp.random.seed(481639)
 
 n=2
 stride = 1
-
-
-#s = re.sub('\n', ' ', s)
-#if unclean:
-#    s = cg.gut_clean(s)
-
-cp.random.seed(481639)
-## alpha of .4452 achieved 0.0 err with offline grams using 1-d512-w9 and 946 char document
-
-#alpha = .369
-#alpha = .4452
-#alpha = .467
-#alpha = .487
-# alpha = .52037
-#alpha = .537
-#alpha = .58
-#alpha = 0.6301
-
-# leaks = [0.8155, 0.6309, 0.3155]
-# leaks = [0.3155, 0.6309, 0.8155]
 leaks = [0.6905, 0.5655, 0.4405]
-# leaks = [0.6905, 0.581, 0.4405]
 # leaks = [0.4405, 0.5655, 0.6905]
-# leaks = [0.73814, .52037, 0.3679]
-# leaks = [0.73814, .58078, 0.43178]
+# leaks = [0.7475, 0.4533, 0.275]
+# leaks = [0.275, 0.4533, 0.7475]
+# leaks = [0.5655, 0.4533, 0.4405]
+
 N = 1024
-#N = 1024
 M = 1024
-layerscales = dict()
 layerscales["L1"] = 3
 layerscales["L2"] = 2
 layerscales["L3"] = 3
 
-amath.setup(dycupy)
-lrate = 0.0025
-SGD = ADAM(alpha=lrate)
+batchsize = 1
+trainsize = 16
+testsize = 8
+lrate = 0.002
 
-variables = dict()
+SGD = ADAM(alpha=lrate)
 variables["W1"] = cp.zeros((M, N * layerscales["L1"]), dtype=np.float32)
 variables["W3"] = cp.zeros((M, N * layerscales["L2"]), dtype=np.float32)
-variables["W5"] = cp.zeros((M, N * layerscales["L3"]), dtype=np.float32)
-# variables["Ws"] = cp.zeros((1024, N*3), dtype=np.float32)
-# variables["Ws"] = cp.array([0.002, 0.003, 0.005], dtype=np.float32)
+variables["Wm"] = cp.zeros((1024, M*3), dtype=np.float32)
+# variables["Wm"] = cp.array([0.0, 0.0, 0.0], dtype=np.float32)
 SGD = SGD.set_shape(variables)
-print("Learning rate:", SGD.alpha)
-L2 = dict()
-L1 = dict()
 for key in variables:
     L1[key] = 0
     L2[key] = 0
 
 ui, u2, u4, v, glist = init(M, N)
 gramindex = {gram:idx for idx, gram in enumerate(glist)}
-# print(len(gramindex), type(gramindex))
-print("ui: {} u2: {} u4: {}".format(ui.shape, u2.shape, u4.shape))
-print("W1: {} W3: {} W5: {}".format(variables["W1"].shape, variables["W3"].shape, variables["W5"].shape))
 
-chunkfile = '/home/user01/dev/language-model/chunks100mb.p'
-outweights = '/home/user01/dev/language-model/outweights100mb.p'
-inweights = '/home/user01/dev/language-model/inweights100mb.p'
-#pickle.dump(allchunks, open(outfile, "wb"))
-chunklist = pickle.load(open(chunkfile, "rb"))
-print(len(chunklist))
-intchunklist = []
+print("L1: {} L2: {} L3: {}".format(layerscales["L1"] * N, layerscales["L2"] * N, layerscales["L3"] * N))
+print("Learning rate:", lrate, "Batch size:", batchsize)
 
-for j in range(33):
+
+for j in range(trainsize):
     chunk = chunklist[j]
-    # pad with space if chunk has an odd number of characters so that
-    # chunk length is compatibile with bigrams using a stride of 2
-    if len(chunk) % 2 != 0:
-        chunk += " "
     sgi = []
     for idx in range(0, len(chunk) - (n - 1), stride):
         try:
@@ -439,40 +596,129 @@ for j in range(33):
         except:
             print(chunk[idx:idx + n])
     intchunk = cp.asarray(sgi, dtype=np.int16)
-    intchunklist.append(intchunk)
+    trainchunks.append(intchunk)
 
-#for i in range(len(chunklist))
+# pickle.dump(trainchunks, open(train1280, "wb"))
+for k in range(trainsize, trainsize + testsize):
+    chunk = chunklist[k]
+    sgi = []
+    for idx in range(0, len(chunk) - (n - 1), stride):
+        try:
+            sgi.append(gramindex[chunk[idx:idx + n]])
+        except:
+            print(chunk[idx:idx + n])
+    intchunk = cp.asarray(sgi, dtype=np.int16)
+    testchunks.append(intchunk)
+# pickle.dump(testchunks, open(test128, "wb"))
+print("train size:", len(trainchunks), "test size:", len(testchunks))
 print(leaks[0], leaks[1], leaks[2])
 totalstart = time.perf_counter()
-for i in range(99):
-    startp = time.perf_counter()
+
+# # get kernel PCA states
+# cpstates = cp.empty((0, N * layerscales["L3"]), dtype=np.float32)
+# npstates = np.empty((0, N * layerscales["L3"]), dtype=np.float32)
+# startp = time.perf_counter()
+# totalerr5 = 0
+# totalstates = 0
+#
+# for chunk in trainchunks:
+#     variables, cpstates = train_kcpa(ui, u2, u4, v, variables, leaks, batchsize, chunk, cpstates)
+#     npstates = np.concatenate((npstates, cp.asnumpy(cpstates)))
+#     cpstates = cp.empty((0, N * layerscales["L3"]), dtype=np.float32)
+#     # totalerr5 += softerrs["lay5"]
+#     totalstates += len(chunk) - 4
+#
+# print("total states:", totalstates, "npstates:", npstates.shape)
+# elapsedp = time.perf_counter() - startp
+# totalelapsed = time.perf_counter() - totalstart
+# tm, ts = divmod(totalelapsed, 60)
+# # totalerr5 = totalerr5 / trainsize
+# print("\n", elapsedp, "-- {0:.0f}m {1:.0f}s".format(tm, ts))
+# # print("Errors:", prederrs["lay5"])
+# # print("Losses:", totalerr5)
+# shuffle(trainchunks)
+
+variables["W5"] = cp.zeros((M, N * layerscales["L3"]), dtype=np.float32)
+SGD = SGD.set_shape(variables)
+for key in variables:
+    L1[key] = 0
+    L2[key] = 0
+
+testflag = 0
+for i in range(80):
+    istart = time.perf_counter()
     totalerr1 = 0
     totalerr3 = 0
     totalerr5 = 0
     totalerrm = 0
-    for chunk in intchunklist:
-        prederrs, softerrs, variables = train(ui, u2, u4, v, variables, leaks, chunk)
+    count = 0
+    startp = time.perf_counter()
+    for chunk in trainchunks:
+        count += 1
+        prederrs, softerrs, variables = train(ui, u2, u4, v, variables, leaks, batchsize, testflag, chunk)
         totalerr1 += softerrs["lay1"]
         totalerr3 += softerrs["lay3"]
         totalerr5 += softerrs["lay5"]
-        # totalerrm += softerrs["laym"]
-#        if i % 100 == 0:
-    elapsedp = time.perf_counter() - startp
-    totalelapsed = time.perf_counter() - totalstart
-    tm, ts = divmod(totalelapsed, 60)
-    totalerr1 = totalerr1 / 33
-    totalerr3 = totalerr3 / 33
-    totalerr5 = totalerr5 / 33
-    # totalerrm = totalerrm / 33
-    print("\n", i, elapsedp, "-- {0:.0f}m {1:.0f}s".format(tm, ts))
-    # print("Errors:", prederrs["lay1"], prederrs["lay3"], prederrs["lay5"])
-    print("Errors:", prederrs["lay5"])
-    print("Losses:", totalerr1, totalerr3, totalerr5)
+        totalerrm += softerrs["laym"]
+        if count % 16 == 0:
+            elapsedp = time.perf_counter() - startp
+            totalelapsed = time.perf_counter() - totalstart
+            tm, ts = divmod(totalelapsed, 60)
+            totalerr1 = totalerr1 / 16
+            totalerr3 = totalerr3 / 16
+            totalerr5 = totalerr5 / 16
+            totalerrm = totalerrm / 16
+            print("\n", i, count, "-- {0:.0f}m {1:.0f}s".format(tm, ts))
+            print("Errors:", prederrs["laym"])
+            # print("Losses:", softerrs["lay5"])
+            print("Losses:", totalerr1, totalerr3, totalerr5, totalerrm)
+            startp = time.perf_counter()
+            totalerr1 = 0
+            totalerr3 = 0
+            totalerr5 = 0
+            totalerrm = 0
+    # elapsedp = time.perf_counter() - startp
+    # ielapsed = time.perf_counter() - istart
+    # tm, ts = divmod(ielapsed, 60)
+    #
+    # print("\n", i, ielapsed, "-- {0:.0f}m {1:.0f}s".format(tm, ts))
+    # print("Errors:", prederrs["lay5"])
     # print("Losses:", totalerr5)
     # generate(128, N, u, variables, alpha, 4)
+    shuffle(trainchunks)
+
+totalerrm = 0
+print("Testing...")
+testflag = 1
+startp = time.perf_counter()
+for chunk in testchunks:
+    prederrs, softerrs, variables = train(ui, u2, u4, v, variables, leaks, batchsize, testflag, chunk)
+    totalerrm += softerrs["laym"]
+    print(totalerrm)
+
+elapsedp = time.perf_counter() - startp
+totalelapsed = time.perf_counter() - totalstart
+tm, ts = divmod(totalelapsed, 60)
+totalerrm = totalerrm / testsize
+
+print("\n", i, elapsedp, "-- {0:.0f}m {1:.0f}s".format(tm, ts))
+print("Test Errors:", prederrs["laym"])
+print("Test Losses:", totalerrm)
+shuffle(testchunks)
+testflag = 0
 
 pickle.dump(variables, open(outweights, "wb"))
 pickle.dump(ui, open(inweights, "wb"))
+
+
+
+
+
+
+
+
+
+
 
 
 #    if tt % 10 == 0:

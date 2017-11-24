@@ -9,6 +9,19 @@ from gensim.models.keyedvectors import KeyedVectors
 import numpy as np
 import cupy as cp
 
+
+outweights = '/home/user01/dev/language-model/outweights' + str(4096) + "-" + str(0) + ".p"
+inweights = '/home/user01/dev/language-model/inweights' + str(4096) + "-" + str(0) + ".p"
+
+inweights = '/home/user01/dev/language-model/inweights0.p0.p'
+outweights = '/home/user01/dev/language-model/outweights0.p0' + ".p"
+
+saved_outweights = pickle.load(open(outweights, "rb"))
+saved_iweights = pickle.load(open(inweights, "rb"))
+print(saved_iweights["U1"].shape, type(saved_iweights["U1"]))
+print(saved_outweights["W1"].shape, type(saved_outweights["W1"]))
+print(saved_iweights)
+print(saved_outweights)
 chunkfile = '/home/user01/dev/language-model/chunks100mb.p'
 outweights = '/home/user01/dev/language-model/outweights100mb.p'
 inweights = '/home/user01/dev/language-model/inweights100mb.p'
@@ -48,6 +61,7 @@ for i in range(3):
 def findFiles(path): return glob.glob(path)
 
 inputpath='/home/user01/dev/data/gutenberg/nochapters-nl'
+inputpath='/home/user01/dev/data/gutenberg/nochapters-nl/test'
 inputpath = inputpath + '/*.txt'
 allchunks = []
 
@@ -71,6 +85,23 @@ for filename in findFiles(inputpath):
             chunk = ""
     print(len(allchunks))
 
+for filename in findFiles(inputpath):
+    with open(filename, "r") as f:
+        raw_text = f.read()
+
+    raw_text = raw_text.strip()
+    splits = raw_text.split(' ')
+    chunk = ''
+
+    for i in range(len(splits)):        
+        chunk += ' ' + splits[i]
+        if len(chunk) >= 136:
+            chunk = chunk[0:128]
+            allchunks.append(chunk)
+
+            chunk = ''
+    print(len(allchunks))
+print(allchunks[24:36])
 #print(len(allchunks[4]), allchunks[4])
 #print(len(allchunks[9]), allchunks[9])
 print(len(allchunks[1700]), allchunks[1700])
@@ -78,7 +109,7 @@ shuffle(allchunks)
 print('\nchunk [1700] after shuffling')
 print(len(allchunks[1700]), allchunks[1700])
 
-outfile = '/home/user01/dev/language-model/chunks256.p'
+outfile = '/home/user01/dev/language-model/chunks136.p'
 
 pickle.dump(allchunks, open(outfile, "wb"))
 

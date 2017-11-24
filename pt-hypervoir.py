@@ -1,201 +1,169 @@
 # pytorch implementation of:
 # "Reservoir Computing on the Hypersphere" - M. Andrecut arXiv:1706.07896
 import torch
+import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
+import torch.optim as optim
+import re
+import pickle
+import time
+from random import shuffle
+from pytorch_tools import torchfold
 # Reservoir computing on the hypersphere
 import numpy as np
 import chargrams as cg
-import csv
+from gensim.models.keyedvectors import KeyedVectors
 
-# create input weight matrix u and hidden state/reservoir matrix v
-def initcuda(M,N):
-    u = np.random.rand(N, M).astype(np.float32)
-    v = np.identity(M)
-    #u = torch.rand(N, M)
-    #v = torch.eye(M, M)
-    # normalizing columns in NxM sized input matrix U as in formulas 6,7
-    for m in range(M):
-        u[:,m] = u[:,m] - u[:,m].mean()
-        u[:,m] = u[:,m]/np.linalg.norm(u[:,m])
-    tv = torch.from_numpy(v)
-    tu = torch.from_numpy(u)
+wv = KeyedVectors.load_word2vec_format('/home/user01/dev/wang2vec/embeddings-i3e4-ssg-neg15-s1024w6.txt', binary=False)
+temp = wv.index2word
+glist = np.array(temp[1:len(temp)])
+glist = [re.sub(r'_', ' ', j) for j in glist]
+gramindex = {gram:idx for idx, gram in enumerate(glist)}
 
-    tv = tv.float().cuda()
-    tu = tu.cuda()
-    #print(tv)
-    #print(tu)
+dtype = torch.cuda.FloatTensor
+n = 2
+stride = 1
+leak = 0.382
+step = 0
+lrate = 0.002
+bs = 1
+trainsize = 64
+i_size = 1024
+h_size = 3072
+torch.cuda.manual_seed(481639)
 
-    return tu, tv, u, v
+# V = torch.eye(i_size).type(torch.LongTensor)
+U1 = torch.randn(h_size, i_size).type(torch.FloatTensor)
+W1 = torch.zeros(i_size, h_size).type(dtype)
 
-def shiftcuda(matrix):
-    #print(matrix)
-    length = len(matrix)
-    end = torch.cuda.FloatTensor([matrix[length - 1]])
-    matrix = torch.cuda.FloatTensor(matrix.narrow(0, 0, length - 1))
-    #print(end)
-    #print(matrix)
-    matrix = torch.cat((end, matrix), 0)
-    return matrix
+# normalize input matrix U to have zero mean and unit variance
+def normalize_u(u):
+    n_columns = u.size(1)
+    for col in range(n_columns):
+        u[:, col] = u[:, col] - u[:, col].mean()
+        u[:, col] = u[:, col] / u[:, col].norm()
+    return u
 
-def grecall(T,N,w,tu,c,a,ss):
-    x,i = np.zeros(N), ss
-    #tx, i = torch.zeros(N), ss
-    tx = torch.from_numpy(x).float().cuda()
-    #y = torch.cuda.FloatTensor()
-    #print(i)
-    ssa = [ss]
-    values = tp = torch.cuda.FloatTensor()
-    indexes = torch.cuda.LongTensor()
-    for t in range(T-1):
-        #print(t)
-        tx = (1 - a) * tx + a * (tu[:, i] + shiftcuda(tx))
-        print(tx)
-        tx = tx / tx.norm()
-        y = torch.exp(torch.mm(tx.view(-1, M), w))
-        #print(y)
-        torch.max(y / torch.sum(y), 1, out=(values, indexes))
-        i = (torch.max(indexes))
-        #print(i)
-        ssa.append(i)
-    return ssa
+def indexToTensor(index):
+    tensor = torch.zeros(1, i_size).type(dtype)
+    tensor[0][index] = 1
+    return tensor
 
-def error(s, ss):
-    #print(s, len(ss))
-    err = 0.
-    for t in range(len(s)):
-        err = err + (s[t] != ss[t])
-    return np.round(err*100.0/len(s),2)
+def chunkToTensor(chunk):
+    tensor = torch.zeros(len(chunk), 1, i_size).type(dtype)
+    for pos, index in enumerate(chunk):
+        tensor[pos][0][index] = 1
+    return tensor
 
-def online_grams(tu, tv, c, a, s:
-    sstext = ""
-    T, (N, M) = len(s), tu.shape
-    w,err,tt = np.zeros((M,N)),100.,0
-    tw = torch.from_numpy(w).float().cuda()
+class Hypervoir(nn.Module):
+    def __init__(self, i_size, h_size, leak):
+        super(Hypervoir, self).__init__()
+        self.leak = leak
+        self.h_size = h_size
+        self.lastidx = h_size - 1
+        self.rollend = torch.FloatTensor(1, 1).type(dtype)
+        self.rollfront = torch.FloatTensor(1, self.lastidx).type(dtype)
 
+        self.hidden2out = nn.Linear(h_size, i_size, bias=False)
+        self.softmax = nn.LogSoftmax()
 
+    def init_hidden(self, bs):
+        return Variable(torch.zeros(bs, self.h_size).type(dtype))
 
-    while err > 0 and tt < T:
-        x = np.zeros(N).astype(np.float32)
-        tx = torch.from_numpy(x)
+    def roll(self, hidden):
+        # self.rollend[0] = hidden[0][self.lastidx]
+        self.rollend = hidden.narrow(1, self.lastidx, 1)
+        self.rollfront = hidden.narrow(1, 0, self.lastidx)
+        hidden = torch.cat((self.rollend, self.rollfront), 1)
+        return hidden
+    # input (u_col) is the column from random input weight matrix U
+    # with the same index as the input bigram
+    def forward(self, u_col, hidden):
+        hidden = (1.0 - self.leak) * hidden + self.leak * (u_col + self.roll(hidden))
+        hidden = hidden / hidden.norm()
+        output = self.hidden2out(hidden)
+        output = self.softmax(output)
+        return output, hidden
 
-        tx = tx.cuda()
+def rollCpu(hidd):
+    lastidx = h_size - 1
+    rollend = hidd.narrow(1, lastidx, 1)
+    rollfront = hidd.narrow(1, 0, lastidx)
+    hidd = torch.cat((rollend, rollfront), 1)
+    return hidd
 
-        for t in range(T-1):
-            #x = (1.0-a)*x + a*(u[:,s[t]] + np.roll(x,1))
-            #print(x)
-            tx = (1 - a) * tx + a * (tu[:, s[t]] + shiftcuda(tx))
-            #print(tx)
-            tx = tx / tx.norm()
+def nextHidden(hidd, ingot, leak):
+    hidd = (1.0 - leak) * hidd + leak * (ingot + rollCpu(hidd))
+    hidd = hidd / hidd.norm()
 
-            #print('w then tx')
-            #print(w, tx)
-            # print(N, M)
-            # print(tx, w)
+def createBatch(chunk, start, bsize, hidd, w_in, leak):
+    # inputs = np.empty(length, dtype=np.int16)
+    # ingots = torch.FloatTensor(b_size, i_size)
+    batch = dict()
+    targets = []
+    states = torch.FloatTensor(b_size, h_size)
+    for i in range(start, start + length):
+        targets.append(chunk[i+1])
+        ingot = w_in[:, chunk[i]]
+        hidd = nextHidden(hidd, ingot, leak)
+        states[i] = hidd
+    batch["states"] = states
+    batch["targets"] = targets
 
+chunkfile = '/home/user01/dev/language-model/chunks256.p'
+chunklist = pickle.load(open(chunkfile, "rb"))
 
-            p = torch.exp(torch.mm(tx.view(-1, M), tw))
+trainchunks = []
+for j in range(trainsize):
+    chunk = chunklist[j]
+    sgi = []
+    for idx in range(0, len(chunk) - (n - 1), stride):
+        try:
+            sgi.append(gramindex[chunk[idx:idx + n]])
+        except:
+            print(chunk[idx:idx + n])
+    intchunk = torch.cuda.LongTensor(sgi)
+    trainchunks.append(intchunk)
 
-            px = np.exp(np.dot(w,nx))
+U1 = normalize_u(U1)
+model = Hypervoir(i_size, h_size, leak)
+model = model.cuda()
+criterion = nn.NLLLoss()
+optimizer = optim.Adam(model.parameters(), lr=lrate)
 
-            #tp = torch.from_numpy(p).float().cuda()
-            #print(p)
-            p = p / torch.sum(p)
+for ep in range(64):
+    shuffle(trainchunks)
+    startp = time.perf_counter()
+    eperr = 0
+    eploss = 0
+    count = 0
+    for chunk in trainchunks:
 
-            p = p.squeeze()
+        t = 0
+        tm1 = len(chunk) - 1
+        hidden = model.init_hidden(bs)
+        chunkloss = 0
+        chunkerr = 0
+        model.zero_grad()
+        for timestep in range(tm1):
+            count += 1
+            incolumn = Variable(U1[:, chunk[t]]).unsqueeze(0)
+            target = Variable(torch.cuda.LongTensor([chunk[t+1]]))
+            output, hidden = model(incolumn, hidden)
+            # probs = output.data[0][target.data[0]]
+            top_n, top_i = output.data.topk(1)
+            eperr += top_i[0][0] != chunk[t+1]
+            loss = criterion(output, target)
+            # chunkloss += loss.data[0]
+            eploss += loss.data[0]
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            t += 1
 
-            tw = tw + torch.ger(tv[:, s[t+1]] - p, tx)
-
-
-            # szero = [s.select(0,0)]
-            # print(szero)
-        ssa = grecall(T, N, tw, tu, c, a, s[0])
-        err, tt = error(s, ssa), tt+1
-
-        if tt % 3 == 0:
-            # for ssi in ssa:
-            #     sstext += glist[ssi]
-            # print(tt,"err=",err,"%\n",sstext,"\n")
-            print(tt,"err=",err,"%")
-    for ssi in ssa:
-        sstext += glist[ssi]
-    print(tt,"err=",err,"%\n",sstext,"\n")
-    return ssa, w
-
-def offline_grams(u,v,c,a,s):
-    sstext = ""
-    T,(N,M),eta = len(s),u.shape,1e-7
-    X,S,x = np.zeros((N,T-1)),np.zeros((M,T-1)),np.zeros(N)
-    for t in range(T-1):
-        x = (1.0-a)*x + a*(u[:,s[t]] + np.roll(x,1))
-        x = x/np.linalg.norm(x)
-        X[:,t],S[:,t] = x,v[:,s[t+1]]
-    XX = np.dot(X,X.T)
-    for n in range(N):
-        XX[n,n] = XX[n,n] + eta
-    w = np.dot(np.dot(S,X.T),np.linalg.inv(XX))
-    ssa = grecall(T,N,w,u,c,alpha,s[0])
-
-    for ssi in ssa:
-        sstext += glist[ssi]
-    print("err=",error(s,ssa),"%\n",sstext,"\n")
-    return ssa,w
-
-s1 = "To Sherlock Holmes she is always THE woman. I have seldom heard him mention her any other name. In his eyes she eclipses and predominates the whole of her sex. It was not that he felt any emotion akin to love for Irene Adler. All emotions, and that one particularly, were abhorrent to his cold, precise but admirably balanced mind. He was, I take it, the most perfect reasoning and observing machine that the world has seen, but as a lover he would have placed himself in a false position. He never spoke of the softer passions, save with a gibe and a sneer. They were admirable things for the observer--excellent for drawing the veil from men’s motives and actions. But for the trained reasoner to admit such intrusions into his own delicate and finely adjusted temperament was to introduce a distracting factor which might throw a doubt upon all his mental results. "
-s2 = "Grit in a sensitive instrument, or a crack in one of his own high-power lenses, would not be more disturbing than a strong emotion in a nature such as his. And yet there was but one woman to him, and that woman was the late Irene Adler, of dubious and questionable memory."
-#s = s1 + s2
-with open('test02.txt', 'r') as ofile:
-    s = ofile.read()
-# number of characters in n-gram
-n=2
-
-glist = []
-with open('counts1024.txt', 'r') as countfile:
-    counts = countfile.readlines()
-for line in counts:
-    glist.append(line[:2])
-gramindex = {gram:idx for idx,gram in enumerate(glist)}
-#print(len(gramindex))
-
-temp = []
-sgi = torch.IntTensor()
-sg = cg.gut_clean(s)
-#print(sgi)
-for idx in range(0, len(sg) - (n - 1), 2):
-    temp.append(gramindex[sg[idx:idx + n]])
-sgi = torch.IntTensor(temp)
-#print(len(sgi))
-#print(sgi)
-
-# T = length of sequence
-# M = number of distinct input states
-#T,M = len(s),len(allchars)
-T,M = len(sgi),len(glist)
-
-# N = number of hidden states/reservoir size (determined by ratio nt calculated above)
-# alpha = integration rate indicating "leakiness", 1 = no leaking/orig model
-# alpha is determined by ratio nt (hidden states) minus ratio mt (input states)
-
-tnt = int(T * 0.62)
-maxn = [tnt, M]
-N = 1024
-# mt = ratio of possible input states to timesteps to memorize
-mt = M / T
-# nt = ratio of reservoir units to timesteps to memorize
-nt = N / T
-alpha = 0.58
-nmta = [str(mt), str(nt), str(alpha)]
-div = ' - '
-print(div.join(nmta))
-print(M, N, alpha)
-
-
-np.random.seed(11712)
-# u = input weight matrix
-# v = hidden state orthogonal identity matrix
-tu,tv,u,v = initcuda(M,N)
-
-#ss,w = offline_grams(u,v,glist,alpha,sgi)
-ss,w = online_grams(tu,tv,glist,alpha,sgi)
-
-print(T,N,M,alpha)
+    eperr = (eperr / count) * 100
+    eploss = (eploss / count) * 100
+    elapsedp = time.perf_counter() - startp
+    tm, ts = divmod(elapsedp, 60)
+    print(ep, eperr, loss.data[0], eploss, "{}m {}s".format(int(tm), int(ts)))

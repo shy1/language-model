@@ -16,6 +16,7 @@ import math
 import os
 import argparse
 import loaders
+import sys
 
 global dtype
 global i_size
@@ -27,37 +28,370 @@ dtype = torch.cuda.FloatTensor
 loadsaved = 0
 n = 2
 stride = 1
-leak = 0.4405
+# .03444, .05573, .09 .146, .236 .382 .618
+leak = 0.382
 step = 0
 lrate = 0.0001
-chunklen = 256
-bs = 1
+chunklen = 112
+bs = 64
 trainsize = 0
-i_size = 256
+i_size = 128
 mult = 4
 # h_size = 1024 * mult
-h_size = 1024
+h_size = 128
 inp_size = int(h_size / 3)
-o_size = 1920
+o_size = 2000
 out_size = 10
 s_size = 256
 l_size = h_size + s_size
 layers = 3
 lr_period = 10
-dropout = 0.0
-rnndrop = 0.1
+dropout = 0.2
+rnndrop = 0.2
+lindrop = 0.382
 
 torch.cuda.manual_seed(481639)
 torch.manual_seed(481639)
 rnnstr = str(layers) + "x" + str(s_size) + "."
-weightfile = '/home/user01/dev/language-model/saved/mnistVD1.mq4.' + rnnstr + str(h_size) + '.RLU.4405.a0001.p'
+weightfile = '/home/user01/dev/language-model/saved/mnistR.mq4.Lin.' + rnnstr + str(h_size) + '.bs1.NA.382.a0001.p'
 
-aestr = "1024" + "x" + "2048" + "x"
+# aestr = "1024" + "x" + "2048" + "x"
 # aefile = '/home/user01/dev/language-model/saved/scoderMSE.' + aestr + str(h_size) + '.TNH.4405.a0001.p'
-aefile = '/home/user01/dev/language-model/saved/scoderCOS.1920x4096.PRLU.4405.a0001.p'
+# aefile = '/home/user01/dev/language-model/saved/scoderCOS.1920x4096.PRLU.4405.a0001.p'
+
+def trainSO():
+
+    weightfile = '/home/user01/dev/language-model/saved/mnistNoESN.V2D2O382.' + rnnstr + str(i_size) + '.BD.bs64.a0001.p'
+    # aesaved = torch.load(aefile)
+    # ae = AutoEncoder(h_size, o_size)
+    # ae.load_state_dict(aesaved["AE"])
+    # ae.cuda()
+
+    if loadsaved:
+        saved = torch.load(weightfile)
+        U1 = saved["U1"]
+    else:
+        U1 = makeU(h_size, i_size)
+
+    # weightfile = '/home/user01/dev/language-model/saved/weights5x768.' + str(h_size) + '.p31.s0.4405.b1a002.p'
+    allweights = dict()
+    allweights["U1"] = U1
+
+    model = Model(i_size, s_size, out_size=out_size, layers=layers, dropout=dropout, rnndrop=rnndrop, lindrop=lindrop)
+
+    if loadsaved:
+        model.load_state_dict(saved["SRU"])
+
+    model.cuda()
+
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    params = sum([np.prod(p.size()) for p in model_parameters])
+
+    print("Model Parameters:", params)
+
+    trainset = loaders.MooreMnistNoESN(U1, h_size, tvt='train', leakrate=leak)
+    valset = loaders.MooreMnistNoESN(U1, h_size, tvt='val', leakrate=leak)
+    # targets = trainset.getTargets()
+    # targets = torch.from_numpy(targets)
+    # targets.cuda()
+    # targetv = Variable(targets, requires_grad=False)
+
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=3, drop_last=True, pin_memory=True)
+    valloader = torch.utils.data.DataLoader(valset, batch_size=bs, shuffle=True, num_workers=3, drop_last=True, pin_memory=True)
+
+    print("loaded: {} file: {}".format(loadsaved, weightfile))
+    print("lr: {} leak: {} hidden: {} VDr: {} Dr: {} SRU: {}x{}".format(lrate, leak, h_size, model.rnndrop, model.lindrop, layers, s_size))
+    model.print_pnorm()
+
+    criterion = nn.CrossEntropyLoss().cuda()
+    needs_grad = lambda x: x.requires_grad
+    optimizer = optim.Adam(
+        filter(needs_grad, model.parameters()),
+        lr=lrate
+    )
+    # optimizer = optim.Adam(model.parameters(), lr=lrate)
+    if loadsaved:
+        optimizer.load_state_dict(saved["opt"])
+    # optimizer = optim.SGD(model.parameters(), lr=lrate, momentum=0.99, weight_decay=0, nesterov=True)
+    interval = 78.0
+    lastidx = chunklen - 1
+    batchloss = torch.Tensor(1).type(dtype)
+    eploss = torch.Tensor(1).type(dtype)
+    batcherr = torch.cuda.LongTensor(1)
+    # out = Variable(torch.Tensor(1, 10).type(dtype))
+    startp = time.perf_counter()
+    for ep in range(64):
+        batcherr[0] = 0
+        batchloss[0] = 0
+        eploss[0] = 0
+        model.train()
+        count = 0
+        for i, (states, posed, targets) in enumerate(trainloader):
+            states = states.permute(1, 0, 2)
+            posed = posed.permute(1, 0, 2).contiguous()
+            print(states.size(), posed.size(), targets.size())
+
+            targets = targets.contiguous()
+            targets = targets.cuda(async=True)
+            states = states.contiguous()
+            states = states.cuda(async=True)
+            posed = posed.cuda(async=True)
+            vtargets = Variable(targets, requires_grad=False)
+            vstates = Variable(states, requires_grad=False)
+            vposed = Variable(posed, requires_grad=False)
+            # if i == 0:
+            #     print(rnnstates.size())
+            optimizer.zero_grad()
+            # print(vstates)
+            output = model(vstates, vposed)
+            # output = output.permute(1, 0, 2)
+            # if i == 0:
+            #     print("o/t:", output, vtargets.data.size())
+            loss = criterion(output, vtargets.squeeze())
+            loss.backward()
+            # norm_grads(model.parameters())
+            optimizer.step()
+
+            batchloss[0] += loss.data[0]
+            top_n, top_i = output.topk(1)
+            # print("o/t:", top_i.data.squeeze().size(), vtargets.data.size())
+            # batcherr[0] += int(top_i[0][0].data != vtargets.squeeze().data)
+            batcherr[0] += top_i.data.squeeze().ne(vtargets.squeeze().data).sum()
 
 
+        elapsedp = time.perf_counter() - startp
+        tm, ts = divmod(elapsedp, 60)
+        # eploss[0] += batchloss[0] / interval
+        bloss = batchloss[0]
+        avgerr = batcherr[0]
+        # print(len(trainset), "v:", len(valset), len(valloader))
+        print("{:3d} {:.5f} {:.5f} {:4d}m {:02d}s".format(ep, bloss / len(trainloader), avgerr / (len(trainloader) * bs), int(tm), int(ts)))
+        # eloss = eploss[0]
+        # print("{:3d} {:.5f}".format(ep, eloss / 11))
+        allweights["SRU"] = model.state_dict()
+        allweights["opt"] = optimizer.state_dict()
+        torch.save(allweights, weightfile)
+        model.print_pnorm()
+        batcherr[0] = 0
+        batchloss[0] = 0
+        model.eval()
+        for i, (states, posed, targets) in enumerate(valloader):
+                states = states.permute(1, 0, 2)
+                posed = posed.permute(1, 0, 2).contiguous()
 
+                targets = targets.contiguous()
+                targets = targets.cuda(async=True)
+                states = states.contiguous()
+                states = states.cuda(async=True)
+                posed = posed.cuda(async=True)
+                vtargets = Variable(targets, requires_grad=False)
+                vstates = Variable(states, requires_grad=False)
+                vposed = Variable(posed, requires_grad=False)
+            # if i == 0:
+            #     print(rnnstates.size())
+            optimizer.zero_grad()
+            output = model(vstates, vposed)
+            loss = criterion(output, vtargets.squeeze())
+
+            batchloss[0] += loss.data[0]
+            top_n, top_i = output.topk(1)
+            # batcherr[0] += int(top_i[0][0].data != vtargets.squeeze().data)
+            batcherr[0] += top_i.data.squeeze().ne(vtargets.squeeze().data).sum()
+
+        bloss = batchloss[0]
+        avgerr = batcherr[0]
+        print("\nValidation Set")
+        print("{:3d} {:6d} {:.5f} {:.5f}\n".format(ep, len(valset), bloss / len(valloader), avgerr / (len(valloader) * bs)))
+        batchloss[0] = 0
+        batcherr[0] = 0
+
+def trainlin():
+
+    # weightfile = '/home/user01/dev/language-model/saved/weights5x768.' + str(h_size) + '.p31.s0.4405.b1a002.p'
+    # aesaved = torch.load(aefile)
+    # ae = AutoEncoder(h_size, o_size)
+    # ae.load_state_dict(aesaved["AE"])
+    # ae.cuda()
+
+    if loadsaved:
+        saved = torch.load(weightfile)
+        U1 = saved["U1"]
+    else:
+        U1 = makeU(h_size, i_size)
+
+    # weightfile = '/home/user01/dev/language-model/saved/weights5x768.' + str(h_size) + '.p31.s0.4405.b1a002.p'
+    allweights = dict()
+    allweights["U1"] = U1
+
+    # model = Model(h_size, s_size, out_size=out_size, layers=layers, dropout=dropout, rnndrop=rnndrop, lindrop=lindrop)
+    model = Net()
+    # lin = nn.Linear(chunklen * h_size, out_size).cuda()
+    # drop = nn.Dropout(lindrop)
+    if loadsaved:
+        model.load_state_dict(saved["LW"])
+
+    model.cuda()
+    # W1 = Variable(torch.Tensor(chunklen * h_size).type(dtype))
+
+    val_range = (3.0/(h_size * chunklen))**0.5
+    print(val_range)
+    for p in model.parameters():
+        print(p.size(), p.dim())
+        # p.data.uniform_(-val_range, val_range)
+        if p.dim() > 1:  # matrix
+            p.data.uniform_(-val_range, val_range)
+        else:
+            p.data.zero_()
+
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    params = sum([np.prod(p.size()) for p in model_parameters])
+
+    print("Model Parameters:", params)
+
+    trainset = loaders.MooreMnistSRU(U1, h_size, tvt='train', leakrate=leak)
+    valset = loaders.MooreMnistSRU(U1, h_size, tvt='val', leakrate=leak)
+    # targets = trainset.getTargets()
+    # targets = torch.from_numpy(targets)
+    # targets.cuda()
+    # targetv = Variable(targets, requires_grad=False)
+
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=7, drop_last=True, pin_memory=True)
+    valloader = torch.utils.data.DataLoader(valset, batch_size=bs, shuffle=True, num_workers=7, drop_last=True, pin_memory=True)
+
+    print("loaded: {} file: {}".format(loadsaved, weightfile))
+    print("lr: {} leak: {} hidden: {} VDr: {} Dr: {} SRU: {}x{}".format(lrate, leak, h_size, rnndrop, lindrop, layers, s_size))
+    # model.print_pnorm()
+
+    criterion = nn.NLLLoss().cuda()
+    # needs_grad = lambda x: x.requires_grad
+    # optimizer = optim.Adam(
+    #     filter(needs_grad, model.parameters()),
+    #     lr=lrate
+    # )
+    optimizer = optim.Adam(model.parameters(), lr=lrate)
+    if loadsaved:
+        optimizer.load_state_dict(saved["opt"])
+    # optimizer = optim.SGD(model.parameters(), lr=lrate, momentum=0.99, weight_decay=0, nesterov=True)
+    interval = 5000.0
+    lastidx = chunklen - 1
+    batchloss = torch.Tensor(1).type(dtype)
+    eploss = torch.Tensor(1).type(dtype)
+    batcherr = torch.cuda.LongTensor(1)
+    first10 = torch.cuda.LongTensor(2, 10)
+    # out = Variable(torch.Tensor(1, 10).type(dtype))
+    startp = time.perf_counter()
+    for ep in range(24):
+        batcherr[0] = 0
+        batchloss[0] = 0
+        eploss[0] = 0
+        model.train()
+        count = 0
+        for i, (states, targets) in enumerate(trainloader):
+            states = states.permute(1, 0, 2)
+            # print(states.size(), targets.size())
+            # targets = targets.permute(1, 0, 2)
+
+            ## TODO: test if calling cuda() outside of variable definition
+            ## has any effect on performance
+            targets = targets.contiguous()
+            targets = targets.cuda(async=True)
+            states = states.contiguous()
+            states = states.cuda(async=True)
+            vtargets = Variable(targets, requires_grad=False)
+            vstates = Variable(states, requires_grad=False)
+            # if i == 0:
+            #     print(rnnstates.size())
+            optimizer.zero_grad()
+            output = model(vstates.view(-1, chunklen * h_size))
+            loss = criterion(output, vtargets.squeeze())
+            # print("o/t:", output, vtargets.data.size())
+            # loss = criterion(output, vtargets.squeeze())
+
+            loss.backward()
+            # norm_grads(model.parameters())
+            optimizer.step()
+
+            batchloss[0] += loss.data[0]
+            top_n, top_i = output.topk(1)
+            # print("o/t:", top_i.data.squeeze().size(), vtargets.data.size())
+            # batcherr[0] += int(top_i[0][0].data != vtargets.squeeze().data)
+            batcherr[0] += top_i.data.squeeze().ne(vtargets.squeeze().data).sum()
+            # count += bs
+            # if i == 0:
+            #     print("be/topi/targets:", batcherr, top_i.data.squeeze(), vtargets.squeeze().data)
+            if i < 10:
+                # print(top_i.data, vtargets.data)
+                first10[0][i] = top_i.squeeze().data[0]
+                first10[1][i] = vtargets.data[0]
+                if i == 9:
+                    print("be/topi/targets:", batcherr / bs, first10)
+            if (i + 1) % interval == 0:
+                elapsedp = time.perf_counter() - startp
+                tm, ts = divmod(elapsedp, 60)
+                eploss[0] += batchloss[0] / (interval * bs)
+                bloss = batchloss[0]
+                avgerr = batcherr[0]
+                # print("c:ixb", count, interval * bs)
+                print("{:3d} {:6d} {:.5f} {:.5f} {:4d}m {:02d}s".format(ep, i + 1, bloss / (interval * bs), avgerr / (interval * bs), int(tm), int(ts)))
+                batchloss[0] = 0
+                batcherr[0] = 0
+                count = 0
+
+        eloss = eploss[0]
+        print("{:3d} {:.5f}".format(ep, eloss / 11))
+        allweights["LW"] = model.state_dict()
+        allweights["opt"] = optimizer.state_dict()
+        torch.save(allweights, weightfile)
+        norms = [ "{:.0f}".format(x.norm().data[0]) for x in model.parameters() ]
+        sys.stdout.write("\tp_norm: {}\n".format(
+            norms
+        ))
+        # model.print_pnorm()
+        batcherr[0] = 0
+        batchloss[0] = 0
+        model.eval()
+        for i, (states, targets) in enumerate(valloader):
+            states = states.permute(1, 0, 2)
+            # targets = targets.permute(1, 0, 2)
+
+            targets = targets.contiguous()
+            targets = targets.cuda(async=True)
+            states = states.contiguous()
+            states = states.cuda(async=True)
+            vtargets = Variable(targets, requires_grad=False)
+            vstates = Variable(states, requires_grad=False)
+            # if i == 0:
+            #     print(rnnstates.size())
+            optimizer.zero_grad()
+            # output = lin(vstates.view(-1))
+            # output = F.log_softmax(output, dim=0)
+            # loss = F.nll_loss(output.unsqueeze(0), vtargets.squeeze())
+            output = model(vstates.view(-1, chunklen * h_size))
+            loss = criterion(output, vtargets.squeeze())
+
+
+            batchloss[0] += loss.data[0]
+            top_n, top_i = output.topk(1)
+            # batcherr[0] += int(top_i[0][0].data != vtargets.squeeze().data)
+            batcherr[0] += top_i.data.squeeze().ne(vtargets.squeeze().data).sum()
+
+        bloss = batchloss[0]
+        avgerr = batcherr[0]
+        print("\nValidation Set")
+        print("{:3d} {:6d} {:.5f} {:.5f}\n".format(ep, len(valloader), bloss / (len(valloader) * bs), avgerr / (len(valloader) * bs)))
+        batchloss[0] = 0
+        batcherr[0] = 0
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.drop = nn.Dropout(lindrop)
+        self.lin = nn.Linear(chunklen * h_size, out_size)
+
+    def forward(self, x):
+        output = self.drop(x)
+        output = self.lin(output)
+        return F.log_softmax(output, dim=1)
 
 def trainset():
 
@@ -77,41 +411,41 @@ def trainset():
     allweights = dict()
     allweights["U1"] = U1
 
-    model = Model(h_size, s_size, out_size=i_size, layers=layers, rnndrop=rnndrop)
-    lin = torch.nn.Linear(l_size, out_size)
+    model = Model(h_size, s_size, out_size=out_size, layers=layers, dropout=dropout, rnndrop=rnndrop, lindrop=lindrop)
+
     if loadsaved:
         model.load_state_dict(saved["SRU"])
-        lin.load_state_dict(saved["lin"])
 
     model.cuda()
-    lin.cuda()
 
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
-    lin_parameters = filter(lambda p: p.requires_grad, lin.parameters())
-    linparams = sum([np.prod(p.size()) for p in lin_parameters])
-    print("Model Parameters:", params, "\nLinear Parameters:", linparams)
 
-    trainset = loaders.MooreMnist(U1, h_size, tvt='train')
-    valset = loaders.MooreMnist(U1, h_size, tvt='val')
+    print("Model Parameters:", params)
+
+    trainset = loaders.MooreMnistSRU(U1, h_size, tvt='train', leakrate=leak)
+    valset = loaders.MooreMnistSRU(U1, h_size, tvt='val', leakrate=leak)
     # targets = trainset.getTargets()
     # targets = torch.from_numpy(targets)
     # targets.cuda()
     # targetv = Variable(targets, requires_grad=False)
 
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=5, drop_last=True, pin_memory=True)
-    valloader = torch.utils.data.DataLoader(valset, batch_size=bs, shuffle=True, num_workers=1, drop_last=True, pin_memory=True)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=7, drop_last=True, pin_memory=True)
+    valloader = torch.utils.data.DataLoader(valset, batch_size=bs, shuffle=True, num_workers=7, drop_last=True, pin_memory=True)
 
     print("loaded: {} file: {}".format(loadsaved, weightfile))
-    print("lr: {} leak: {} hidden: {} VDr: {} Dr: {} SRU: {}x{}".format(lrate, leak, h_size, model.rnndrop, model.dropout, layers, s_size))
-
+    print("lr: {} leak: {} hidden: {} VDr: {} Dr: {} SRU: {}x{}".format(lrate, leak, h_size, model.rnndrop, model.lindrop, layers, s_size))
+    model.print_pnorm()
 
     criterion = nn.CrossEntropyLoss().cuda()
-    optimizer = optim.Adam(model.parameters(), lr=lrate, betas=(0.9, 0.999))
-    linopt = optim.Adam(lin.parameters(), lr=lrate, betas=(0.9, 0.999))
+    needs_grad = lambda x: x.requires_grad
+    optimizer = optim.Adam(
+        filter(needs_grad, model.parameters()),
+        lr=lrate
+    )
+    # optimizer = optim.Adam(model.parameters(), lr=lrate)
     if loadsaved:
         optimizer.load_state_dict(saved["opt"])
-        linopt.load_state_dict(saved["linopt"])
     # optimizer = optim.SGD(model.parameters(), lr=lrate, momentum=0.99, weight_decay=0, nesterov=True)
     interval = 5000.0
     lastidx = chunklen - 1
@@ -120,14 +454,16 @@ def trainset():
     batcherr = torch.cuda.LongTensor(1)
     # out = Variable(torch.Tensor(1, 10).type(dtype))
     startp = time.perf_counter()
-    for ep in range(64):
+    for ep in range(24):
         batcherr[0] = 0
         batchloss[0] = 0
         eploss[0] = 0
         model.train()
+        count = 0
         for i, (states, targets) in enumerate(trainloader):
             states = states.permute(1, 0, 2)
-            targets = targets.permute(1, 0, 2)
+            # print(states.size(), targets.size())
+            # targets = targets.permute(1, 0, 2)
 
             ## TODO: test if calling cuda() outside of variable definition
             ## has any effect on performance
@@ -135,148 +471,136 @@ def trainset():
             targets = targets.cuda(async=True)
             states = states.contiguous()
             states = states.cuda(async=True)
-            rnnstates = Variable(states.narrow(0, 0, lastidx), requires_grad=False)
-            linstate = Variable(states.narrow(0, lastidx, 1), requires_grad=False)
-            rnntargets = Variable(targets.narrow(0, 0, lastidx), requires_grad=False)
-            lintarget = Variable(targets.narrow(0, lastidx, 1), requires_grad=False)
-            # if i == 0:
-            #     print(rnnstates.size())
-            # encodedr = ae(rnnstates.squeeze())
-            # encodedl = ae(linstate.squeeze())
+            vtargets = Variable(targets, requires_grad=False)
+            vstates = Variable(states, requires_grad=False)
             # if i == 0:
             #     print(rnnstates.size())
             optimizer.zero_grad()
-            linopt.zero_grad()
-            output, hidden = model(rnnstates)
-            lasthid = hidden[layers - 1].squeeze()
-            # if i == 0:
-            #     print(linstate.squeeze().size(), lasthid.size())
-            combined = torch.cat((linstate.squeeze(), lasthid))
-            linout = lin(combined)
+            output = model(vstates)
 
-
-            loss = criterion(output, rnntargets.squeeze())
-            loss.backward(retain_graph=True)
-            linloss = criterion(linout.unsqueeze(0), lintarget.squeeze())
-            linloss.backward()
+            # print("o/t:", output, vtargets.data.size())
+            loss = criterion(output, vtargets.squeeze())
+            loss.backward()
+            # norm_grads(model.parameters())
             optimizer.step()
-            linopt.step()
-            batchloss[0] += linloss.data[0]
-            top_n, top_i = linout.topk(1)
 
-            batcherr[0] += int(top_i[0][0].data != lintarget.squeeze().data)
-
+            batchloss[0] += loss.data[0]
+            top_n, top_i = output.topk(1)
+            # print("o/t:", top_i.data.squeeze().size(), vtargets.data.size())
+            # batcherr[0] += int(top_i[0][0].data != vtargets.squeeze().data)
+            batcherr[0] += top_i.data.squeeze().ne(vtargets.squeeze().data).sum()
+            # count += bs
+            if i == 0:
+                print("be/topi/targets:", batcherr, top_i.data.squeeze(), vtargets.squeeze().data)
             if (i + 1) % interval == 0:
                 elapsedp = time.perf_counter() - startp
                 tm, ts = divmod(elapsedp, 60)
-                eploss[0] += batchloss[0] / interval
+                eploss[0] += batchloss[0] / (interval * bs)
                 bloss = batchloss[0]
                 avgerr = batcherr[0]
-
-                print("{:3d} {:6d} {:.5f} {:.5f} {:4d}m {:02d}s".format(ep, i + 1, bloss / interval, avgerr / interval, int(tm), int(ts)))
+                # print("c:ixb", count, interval * bs)
+                print("{:3d} {:6d} {:.5f} {:.5f} {:4d}m {:02d}s".format(ep, i + 1, bloss / (interval * bs), avgerr / (interval * bs), int(tm), int(ts)))
                 batchloss[0] = 0
                 batcherr[0] = 0
+                count = 0
 
         eloss = eploss[0]
         print("{:3d} {:.5f}".format(ep, eloss / 11))
         allweights["SRU"] = model.state_dict()
         allweights["opt"] = optimizer.state_dict()
-        allweights["lin"] = lin.state_dict()
-        allweights["linopt"] = linopt.state_dict()
         torch.save(allweights, weightfile)
-
+        model.print_pnorm()
         batcherr[0] = 0
         batchloss[0] = 0
         model.eval()
         for i, (states, targets) in enumerate(valloader):
             states = states.permute(1, 0, 2)
-            targets = targets.permute(1, 0, 2)
+            # targets = targets.permute(1, 0, 2)
 
+            targets = targets.contiguous()
             targets = targets.cuda(async=True)
             states = states.contiguous()
-            states = states.cuda()
+            states = states.cuda(async=True)
+            vtargets = Variable(targets, requires_grad=False)
+            vstates = Variable(states, requires_grad=False)
+            # if i == 0:
+            #     print(rnnstates.size())
+            optimizer.zero_grad()
+            output = model(vstates)
+            loss = criterion(output, vtargets.squeeze())
 
-            rnnstates = Variable(states.narrow(0, 0, lastidx), requires_grad=False)
-            linstate = Variable(states.narrow(0, lastidx, 1), requires_grad=False)
-            rnntargets = Variable(targets.narrow(0, 0, lastidx), requires_grad=False)
-            lintarget = Variable(targets.narrow(0, lastidx, 1), requires_grad=False)
-
-            # encodedr = ae(rnnstates.squeeze())
-            # encodedl = ae(linstate.squeeze())
-            output, hidden = model(rnnstates)
-            lasthid = hidden[layers - 1].squeeze()
-            combined = torch.cat((linstate.squeeze(), lasthid))
-            linout = lin(combined)
-            loss = criterion(output, rnntargets.squeeze())
-            # loss.backward(retain_graph=True)
-            linloss = criterion(linout.unsqueeze(0), lintarget.squeeze())
-            batchloss[0] += linloss.data[0]
-            top_n, top_i = linout.topk(1)
-            batcherr[0] += int(top_i[0][0].data != lintarget.squeeze().data)
+            batchloss[0] += loss.data[0]
+            top_n, top_i = output.topk(1)
+            # batcherr[0] += int(top_i[0][0].data != vtargets.squeeze().data)
+            batcherr[0] += top_i.data.squeeze().ne(vtargets.squeeze().data).sum()
 
         bloss = batchloss[0]
         avgerr = batcherr[0]
         print("\nValidation Set")
-        print("{:3d} {:6d} {:.5f} {:.5f}\n".format(ep, len(valloader), bloss / len(valloader), avgerr / len(valloader)))
+        print("{:3d} {:6d} {:.5f} {:.5f}\n".format(ep, len(valloader), bloss / (len(valloader) * bs), avgerr / (len(valloader) * bs)))
         batchloss[0] = 0
         batcherr[0] = 0
 
+def norm_grads(parameters, norm_type=2):
+    parameters = list(filter(lambda p: p.grad is not None, parameters))
+    norm_type = float(norm_type)
+    for p in parameters:
+        gnorm = p.grad.data.norm(norm_type)
+        if gnorm > 1:
+            p.grad.data.div_(gnorm + 1e-8)
 
 
 class Model(nn.Module):
-    def __init__(self, in_size, hid_size, out_size=128, layers=2, dropout=0.0, rnndrop=0.2):
+    def __init__(self, in_size, hid_size, out_size=10, layers=2, dropout=0.0, rnndrop=0.2, lindrop=0.0):
         super(Model, self).__init__()
         self.in_size = in_size
-        self.inp_size = int(in_size / 3)
         self.hid_size = hid_size
         self.out_size = out_size
         self.layers = layers
         self.dropout = dropout
         self.rnndrop = rnndrop
-        # self.drop = nn.Dropout(0.5)
-        # self.input_layer1 = nn.Linear(self.in_size, hid_size, bias=False)
+        self.lindrop = lindrop
 
-        # self.rnn = SRU(self.hid_size, self.hid_size,
+        self.drop = nn.Dropout(self.lindrop)
         self.rnn = SRU(self.in_size, self.hid_size,
             num_layers = self.layers,          # number of stacking RNN layers
             dropout = self.dropout,           # dropout applied between RNN layers
             rnn_dropout = self.rnndrop,       # variational dropout applied on linear transformation
             use_tanh = 0,            # use tanh?
             use_relu = 1,            # use ReLU?
-            bidirectional = False    # bidirectional RNN ?
+            bidirectional = True    # bidirectional RNN ?
         )
-        self.output_layer = nn.Linear(self.hid_size, self.out_size)
+        self.output_layer = nn.Linear(self.hid_size * chunklen * 2, self.out_size)
 
         self.init_weights()
         # self.rnn.set_bias(args.bias)
 
     def init_weights(self):
-        val_range = (16.0/self.hid_size)**0.5
+        val_range = (3.0/(self.hid_size*chunklen))**0.5
         print(val_range)
         for p in self.parameters():
-            # print(p, p.dim())
-            p.data.uniform_(-val_range, val_range)
-            # if p.dim() > 1:  # matrix
-            #     p.data.uniform_(-val_range, val_range)
-            # else:
-            #     p.data.zero_()
+            print(p.size(), p.dim())
+            # p.data.uniform_(-val_range, val_range)
+            if p.dim() > 1:  # matrix
+                p.data.uniform_(-val_range, val_range)
+            else:
+                p.data.zero_()
+
 
     def forward(self, x):
-        # inp = self.drop(self.input_layer(x))
         # print("x:", x.size())
-
-        # inp = self.input_layer1(x)
-        # inp = self.drop(x)
-        inp = x
-
-        # print("inp:", inp.size())
-        # output, hidden = self.rnn(inp.unsqueeze(1))
-        output, hidden = self.rnn(inp)
+        # if self.lindrop > 0:
+        #     x = self.drop(x)
+        output, hidden = self.rnn(x)
         # print("out1:", output.size())
-        output = output.view(-1, output.size(2))
+        output = output.permute(1, 0, 2)
+        output = output.contiguous()
+        output = output.view(-1, self.hid_size * chunklen * 2)
         # print("out2:", output.size())
+        if self.lindrop > 0:
+            output = self.drop(output)
         output = self.output_layer(output)
-        return output, hidden
+        return output
 
     def init_hidden(self, batch_size):
         weight = next(self.parameters()).data
@@ -875,5 +1199,6 @@ def train():
 
 
 # train()
-trainset()
-# trainm()
+# trainset()
+# trainlin()
+trainSO()

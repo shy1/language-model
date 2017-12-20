@@ -34,14 +34,14 @@ chunklen = 192
 bs = 1
 trainsize = 0
 i_size = 1024
-mult = 10
+mult = 8
 h_size = i_size * mult
 inp_size = int(h_size / 3)
 s_size = 640
 layers = 3
 lr_period = 10
 torch.cuda.manual_seed(481639)
-weightfile = '/home/user01/dev/language-model/saved/weightsTest.3x640.' + str(h_size) + '.s0.4405.a0001.p'
+weightfile = '/home/user01/dev/language-model/saved/weightsWithBias.3x640.' + str(h_size) + '.s0.4405.a0001.p'
 
 def trainset():
 
@@ -54,6 +54,7 @@ def trainset():
 
     # weightfile = '/home/user01/dev/language-model/saved/weights5x768.' + str(h_size) + '.p31.s0.4405.b1a002.p'
     allweights = dict()
+    allweights["U1"] = U1
 
     model = Model(h_size, s_size, layers=layers)
     if loadsaved:
@@ -111,7 +112,7 @@ def trainset():
                 tm, ts = divmod(elapsedp, 60)
                 print("{:3d} {:6d} {:.5f} {:4d}m {:02d}s".format(ep, i, batchloss / interval, int(tm), int(ts)))
                 batchloss = 0
-        allweights["U1"] = traindata.getU()
+
         allweights["SRU"] = model.state_dict()
         allweights["opt"] = optimizer.state_dict()
         torch.save(allweights, weightfile)
@@ -126,7 +127,9 @@ class Model(nn.Module):
         self.out_size = out_size
         self.layers = layers
         # self.drop = nn.Dropout(dropout)
-        self.input_layer1 = nn.Linear(self.in_size, hid_size)
+
+        # make sure to adjust bias setting for previously saved model weights that used bias
+        self.input_layer1 = nn.Linear(self.in_size, hid_size, bias=True)
 
         self.rnn = SRU(self.hid_size, self.hid_size,
             num_layers = self.layers,          # number of stacking RNN layers

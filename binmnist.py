@@ -2,13 +2,11 @@ from __future__ import print_function
 
 import torch
 import torch.utils.data as data_utils
-
 import numpy as np
 import os
 import itertools as it
-# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+import pickle
 
-# ======================================================================================================================
 def get_list():
     tuples = it.product([0, 1], repeat=7)
     arrlist = []
@@ -23,6 +21,7 @@ def get_list():
 
 def load_binary(bs, workers, pin):
     from torchvision import datasets, transforms
+    filename = '../data/vscan_binmist_tvt.p'
     train_loader = torch.utils.data.DataLoader( datasets.MNIST('../data/mnist', train=True, download=True,
                                                                transform=transforms.Compose([
                                                                    transforms.ToTensor()
@@ -36,11 +35,11 @@ def load_binary(bs, workers, pin):
 
     x_train = train_loader.dataset.train_data.float().numpy() / 255.
     x_train = np.reshape( x_train, (x_train.shape[0], x_train.shape[1] * x_train.shape[2] ) )
-    y_train = np.array( train_loader.dataset.train_labels.float().numpy(), dtype=int)
+    y_train = np.array( train_loader.dataset.train_labels.float().numpy(), dtype=np.long)
 
     x_test = test_loader.dataset.test_data.float().numpy() / 255.
     x_test = np.reshape( x_test, (x_test.shape[0], x_test.shape[1] * x_test.shape[2] ) )
-    y_test = np.array( test_loader.dataset.test_labels.float().numpy(), dtype=int)
+    y_test = np.array( test_loader.dataset.test_labels.float().numpy(), dtype=np.long)
 
     np.random.seed(4648)
     x_train[x_train > 0.67] = 1
@@ -51,20 +50,29 @@ def load_binary(bs, workers, pin):
     x_test = np.reshape(x_test, (x_test.shape[0], 28, 28))
     # print(x_test[128], x_test[128].T)
     # xtv = np.empty((x_test.shape[0], 112, 7), dtype=np.int32)
-    xtv = np.empty((x_test.shape[0], 112, 1), dtype=np.int32)
+    xtestv = np.empty((x_test.shape[0], 112, 1), dtype=np.int32)
+    xtrainv = np.empty((x_train.shape[0], 112, 1), dtype=np.int32)
     # xth = np.empty((x_test.shape[0], 112, 7), dtype=np.int32)
 
-    # for i in range(x_test.shape[0]):
-    #     temp = np.hsplit(x_test[i], 4)
-    #     xtv[i] = np.concatenate(temp)
-    #     # temp = np.hsplit(x_test[i].T, 4)
-    #     # xth[i] = np.concatenate(temp)
 
-    # both = np.concatenate((xtv[128], xth[128]))
-    # print(both[60:80])
-    # print(both[172:192])
 
     indexed = get_list()
+    nptemp = np.empty((112, 1), dtype=np.int32)
+    for i in range(x_train.shape[0]):
+        temp = np.hsplit(x_train[i], 4)
+        temp = np.concatenate(temp)
+        for idx in range(len(temp)):
+            tempa = temp[idx].tolist()
+            # print(tempa)
+            tempb = tuple(tempa)
+            # print(tempb)
+            # print(indexed[tempb])
+            nptemp[idx] = indexed[tempb]
+        xtrainv[i] = nptemp
+    # print(xtrainv[128])
+    # print(xtrainv.shape)
+
+
     nptemp = np.empty((112, 1), dtype=np.int32)
     for i in range(x_test.shape[0]):
         temp = np.hsplit(x_test[i], 4)
@@ -76,15 +84,38 @@ def load_binary(bs, workers, pin):
             # print(tempb)
             # print(indexed[tempb])
             nptemp[idx] = indexed[tempb]
-        xtv[i] = nptemp
-    print(xtv[128])
+        xtestv[i] = nptemp
+    # print(xtestv[128])
+    # print(xtestv.shape)
+
+
+    # for i in range(x_test.shape[0]):
+    #     temp = np.hsplit(x_test[i], 4)
+    #     xtv[i] = np.concatenate(temp)
+    #     # temp = np.hsplit(x_test[i].T, 4)
+    #     # xth[i] = np.concatenate(temp)
+
+    # both = np.concatenate((xtv[128], xth[128]))
+    # print(both[60:80])
+    # print(both[172:192])
 
     # validation set
-    # x_val = x_train[55000:60000]
-    # y_val = np.array(y_train[55000:60000], dtype=int)
-    # x_train = x_train[0:55000]
-    # y_train = np.array(y_train[0:55000], dtype=int)
-    #
+    splits = dict()
+    splits["x_val"] = xtrainv[55000:60000]
+    splits["y_val"] = np.array(y_train[55000:60000])
+    splits["x_train"] = xtrainv[0:55000]
+    splits["y_train"] = np.array(y_train[0:55000])
+    splits["x_test"] = xtestv
+    splits["y_test"] = y_test
+    print(splits["x_train"].shape)
+    print(splits["x_val"].shape)
+    print(splits["x_test"].shape)
+    print(splits["y_train"].shape)
+    print(splits["y_val"].shape)
+    print(splits["y_test"].shape)
+    print(splits["y_train"].dtype)
+    print(splits["y_test"].dtype)
+    pickle.dump(splits, open(filename, "wb"))
     # train = data_utils.TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
     # train_loader = data_utils.DataLoader(train, batch_size=bs, shuffle=True, num_workers=workers, pin_memory=pin)
     #
